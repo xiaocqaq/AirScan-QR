@@ -130,33 +130,6 @@
   .pbar-wrap { background: var(--line); border-radius: 999px; height: 10px; overflow: hidden; margin-bottom: 10px; }
   .pbar { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .2s ease; }
 
-  /* 框选遮罩 */
-  #overlay {
-    position: fixed; inset: 0; z-index: 999; display: none;
-    background: #000; cursor: crosshair;
-  }
-  #overlay img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; pointer-events: none; }
-  #ovhint {
-    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
-    color: #fff; font-size: 15px; font-weight: 700; z-index: 1001;
-    background: rgba(0,0,0,.5); padding: 8px 18px; border-radius: 999px;
-  }
-  #selrect {
-    position: absolute; border: 2px solid #22d3ee; background: rgba(34,211,238,.15);
-    z-index: 1000; display: none;
-  }
-
-  /* 捕获模式切换 */
-  .cap-modes { display: flex; gap: 10px; }
-  .cap-mode {
-    flex: 1; padding: 12px; border-radius: 14px; border: 2px solid var(--line);
-    background: var(--field); color: var(--ink2); font-size: 14px; font-weight: 700;
-    cursor: pointer; font-family: inherit; transition: all .16s ease;
-    display: flex; align-items: center; justify-content: center; gap: 8px;
-  }
-  .cap-mode small { font-size: 11px; font-weight: 500; color: var(--muted); }
-  .cap-mode.active { border-color: var(--accent); background: #eff6ff; color: var(--accent); }
-  .cap-mode.active small { color: var(--accent); }
   .hint-line { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
 
   /* 文本消息列表 */
@@ -208,7 +181,7 @@
       <textarea id="inputText" placeholder="输入要发送的文本，或点下方按钮选择文件…"></textarea>
       <div class="row">
         <button class="btn btn-gray" onclick="pickFile()">📎 选择文件</button>
-        <button class="btn btn-primary" id="btnSwap" onclick="startSend()" title="用当前文本/文件替换正在广播的内容">🔄 发送</button>
+        <button class="btn btn-primary" id="btnSwap" onclick="startSend()" title="用当前文本/文件替换正在广播的内容">发送</button>
         <span class="field-name" id="fileName">未选择文件</span>
         <button class="btn-del" id="btnClearFile" onclick="clearFile()" style="display:none" title="删除附件">✕</button>
       </div>
@@ -245,29 +218,14 @@
   <!-- 接收面板 -->
   <div class="panel" id="panel-recv">
     <div class="card">
-      <div class="cap-modes">
-        <button class="cap-mode active" id="mode-region" onclick="setMode('region')">🖼️ 框选区域</button>
-        <button class="cap-mode" id="mode-window" onclick="setMode('window')">🪟 锁定窗口<small>后台运行</small></button>
+      <!-- 窗口下拉选择 (锁定窗口, 支持后台运行) -->
+      <div class="row" style="margin-top:0">
+        <select id="winSel" style="flex:1" onchange="onWinPick()">
+          <option value="">① 选择要接收的窗口…</option>
+        </select>
+        <button class="btn btn-gray" onclick="refreshWindows()">↻ 刷新</button>
       </div>
-
-      <!-- 区域模式 -->
-      <div class="mode-body" id="body-region">
-        <div class="row" style="margin-top:14px">
-          <button class="btn btn-indigo" onclick="selectRegion()">① 框选区域</button>
-          <span class="field-name" id="regionName">未框选</span>
-        </div>
-      </div>
-
-      <!-- 窗口模式: 下拉列表选窗 -->
-      <div class="mode-body" id="body-window" style="display:none">
-        <div class="row" style="margin-top:14px">
-          <select id="winSel" style="flex:1" onchange="onWinPick()">
-            <option value="">① 选择要监控的窗口…</option>
-          </select>
-          <button class="btn btn-gray" onclick="refreshWindows()">↻ 刷新</button>
-        </div>
-        <div class="hint-line">锁定窗口后即使它被遮挡或在后台，也能持续接收（发送端窗口不要最小化）。</div>
-      </div>
+      <div class="hint-line">锁定发送端窗口后即使它被遮挡或在后台，也能持续接收（发送端窗口不要最小化）。</div>
 
       <div class="row" style="margin-top:16px">
         <button class="btn btn-primary" id="btnRecv" onclick="startRecv()" disabled>② 开始接收</button>
@@ -291,13 +249,6 @@
   </div>
 </div>
 
-<!-- 框选遮罩 -->
-<div id="overlay">
-  <img id="ovimg">
-  <div id="ovhint">拖拽框选发送端二维码区域 · Esc 取消</div>
-  <div id="selrect"></div>
-</div>
-
 <div id="toast"></div>
 
 <script>
@@ -317,6 +268,7 @@
     document.getElementById('tab-recv').classList.toggle('active', t === 'recv');
     document.getElementById('panel-send').classList.toggle('show', t === 'send');
     document.getElementById('panel-recv').classList.toggle('show', t === 'recv');
+    if (t === 'recv') { refreshWindows(); }   // 进接收页自动列出窗口
   }
 
   /* --- 发送 --- */
@@ -375,63 +327,6 @@
     document.getElementById('sendStatus').innerText = status;
   }
 
-  /* --- 接收: 框选区域 (全屏 overlay) --- */
-  let ov = { active: false, sx: 0, sy: 0, natW: 0, natH: 0 };
-  const overlay = document.getElementById('overlay');
-  const selrect = document.getElementById('selrect');
-  const ovhint = document.getElementById('ovhint');
-
-  async function selectRegion() {
-    const res = await api('grab_fullscreen');   // 先截图(此时还是小窗, 能拍到桌面目标)
-    if (!res) { toast('截屏失败'); return; }
-    await api('enter_overlay');                 // 再全屏, 使遮罩铺满真实屏幕、坐标 1:1
-    ov.natW = res.w; ov.natH = res.h;
-    document.getElementById('ovimg').src = res.img;
-    ovhint.innerText = '拖拽框选发送端二维码区域 · Esc 取消';
-    selrect.style.display = 'none';
-    overlay.style.display = 'block';
-  }
-
-  // 视口坐标 -> 屏幕自然像素
-  function toNative(cx, cy) {
-    return [cx * ov.natW / window.innerWidth, cy * ov.natH / window.innerHeight];
-  }
-
-  overlay.addEventListener('mousedown', e => {
-    ov.active = true; ov.sx = e.clientX; ov.sy = e.clientY;
-    selrect.style.display = 'block';
-    selrect.style.left = e.clientX + 'px'; selrect.style.top = e.clientY + 'px';
-    selrect.style.width = '0px'; selrect.style.height = '0px';
-  });
-  overlay.addEventListener('mousemove', e => {
-    if (!ov.active) return;
-    const l = Math.min(ov.sx, e.clientX), t = Math.min(ov.sy, e.clientY);
-    selrect.style.left = l + 'px'; selrect.style.top = t + 'px';
-    selrect.style.width = Math.abs(e.clientX - ov.sx) + 'px';
-    selrect.style.height = Math.abs(e.clientY - ov.sy) + 'px';
-  });
-  overlay.addEventListener('mouseup', async e => {
-    if (!ov.active) return;
-    ov.active = false;
-    overlay.style.display = 'none';
-    await api('exit_overlay');                   // 恢复窗口
-    const [l0, t0] = toNative(Math.min(ov.sx, e.clientX), Math.min(ov.sy, e.clientY));
-    const [r0, b0] = toNative(Math.max(ov.sx, e.clientX), Math.max(ov.sy, e.clientY));
-    const l = Math.round(l0), t = Math.round(t0), r = Math.round(r0), b = Math.round(b0);
-    if (r - l < 20 || b - t < 20) { toast('选区太小'); return; }
-    await api('set_region', l, t, r, b);
-    window._regionSet = true;
-    document.getElementById('regionName').innerText = `${r - l}×${b - t}`;
-    document.getElementById('regionName').classList.add('set');
-    document.getElementById('btnRecv').disabled = false;
-  });
-  document.addEventListener('keydown', async e => {
-    if (e.key === 'Escape' && overlay.style.display === 'block') {
-      overlay.style.display = 'none'; ov.active = false;
-      await api('exit_overlay');                 // 取消也恢复窗口
-    }
-  });
-
   /* --- 接收: 启停 --- */
   async function startRecv() {
     await api('start_recv');
@@ -470,22 +365,11 @@
     }
   }
 
-  /* --- 捕获模式切换 --- */
-  async function setMode(m) {
-    document.getElementById('mode-region').classList.toggle('active', m === 'region');
-    document.getElementById('mode-window').classList.toggle('active', m === 'window');
-    document.getElementById('body-region').style.display = m === 'region' ? 'block' : 'none';
-    document.getElementById('body-window').style.display = m === 'window' ? 'block' : 'none';
-    if (m === 'window') { await refreshWindows(); }
-    document.getElementById('btnRecv').disabled =
-      m === 'window' ? !window._winSet : !window._regionSet;
-  }
-
-  /* --- 窗口选择: 下拉列表 (方案 C) --- */
+  /* --- 窗口选择: 下拉列表 --- */
   async function refreshWindows() {
     const wins = (await api('list_windows')) || [];
     const sel = document.getElementById('winSel');
-    sel.innerHTML = '<option value="">① 选择要监控的窗口…</option>';
+    sel.innerHTML = '<option value="">① 选择要接收的窗口…</option>';
     wins.forEach(w => {
       const o = document.createElement('option');
       o.value = w.hwnd;

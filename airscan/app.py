@@ -61,11 +61,9 @@ class Api:
         self._send_thread = None
         self.fps = 8
         self._picked_file = None
-        # 接收态
+        # 接收态 (仅窗口捕获)
         self.receiver = None
-        self.bbox = None
-        self.hwnd = None          # 窗口捕获模式: 锁定的窗口句柄
-        self.mode = "region"      # "region" | "window"
+        self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
         self._recv_thread = None
         self._messages = []       # 已接收的文本消息 (供逐条复制)
@@ -135,52 +133,18 @@ class Api:
             _js(f"pushQR({_js_str(dataurl)}, {_js_str(status)})")
             time.sleep(1.0 / max(1, self.fps))
 
-    # ---------------- 接收 ----------------
-    def enter_overlay(self):
-        """进入框选/选窗前把主窗口切全屏, 使 HTML 遮罩铺满真实屏幕、坐标近 1:1。"""
-        global _fullscreen
-        if not _fullscreen and _window is not None:
-            _window.toggle_fullscreen()
-            _fullscreen = True
-        return {"ok": True}
-
-    def exit_overlay(self):
-        """框选/选窗结束后恢复窗口。"""
-        global _fullscreen
-        if _fullscreen and _window is not None:
-            _window.toggle_fullscreen()
-            _fullscreen = False
-        return {"ok": True}
-
-    def grab_fullscreen(self):
-        from PIL import ImageGrab
-        img = ImageGrab.grab()
-        w, h = img.size
-        # 缩小以加快传输 (仅作框选底图, 不需原分辨率)
-        preview = img.copy()
-        preview.thumbnail((1600, 1600))
-        return {"img": _img_to_dataurl(preview.convert("RGB")), "w": w, "h": h}
-
-    def set_region(self, l, t, r, b):
-        self.mode = "region"
-        self.hwnd = None
-        self.bbox = (int(l), int(t), int(r), int(b))
-
+    # ---------------- 接收 (仅窗口捕获) ----------------
     def list_windows(self):
-        """返回可选窗口列表, 供前端选择窗口捕获模式。"""
+        """返回可选窗口列表, 供前端下拉选择。"""
         return wincap.list_windows()
 
     def set_window(self, hwnd):
         """锁定某个窗口做后台捕获。"""
-        self.mode = "window"
         self.hwnd = int(hwnd)
-        self.bbox = None
         return {"ok": True}
 
     def start_recv(self):
-        if self.mode == "region" and not self.bbox:
-            return {"error": "请先框选区域"}
-        if self.mode == "window" and not self.hwnd:
+        if not self.hwnd:
             return {"error": "请先选择窗口"}
         self.receiver = Receiver(on_meta=self._on_meta,
                                  on_progress=self._on_progress,
@@ -198,11 +162,8 @@ class Api:
     def _recv_loop(self):
         while not self._recv_stop.is_set():
             try:
-                if self.mode == "window":
-                    img = wincap.grab_window(self.hwnd)
-                    self.receiver.feed(img)
-                else:
-                    self.receiver.poll(self.bbox)
+                img = wincap.grab_window(self.hwnd)
+                self.receiver.feed(img)
             except Exception as e:
                 _js(f"document.getElementById('recvStatus').innerText={_js_str('捕获错误: ' + str(e))}")
             time.sleep(0.06)
