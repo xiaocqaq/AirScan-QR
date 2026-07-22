@@ -1,0 +1,6 @@
+segno>=1.6.0
+pyzbar>=0.1.9
+pillow>=10.0.0
+numpy>=1.24.0
+pywebview>=5.0
+pywin32>=306; sys_platform == "win32"

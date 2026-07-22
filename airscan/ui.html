@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AirScan-QR</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-user-select: none; user-select: none; }
+  :root {
+    --bg: #f1f5f9; --card: #ffffff; --ink: #1e293b; --ink2: #475569;
+    --muted: #94a3b8; --line: #e2e8f0; --field: #f8fafc;
+    --accent: #2563eb; --accent-hi: #1d4ed8; --indigo: #6366f1;
+    --ok: #16a34a; --warn: #dc2626;
+  }
+  html, body { height: 100%; }
+  body {
+    font-family: "微软雅黑", system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--ink);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* 顶栏 */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 24px 14px;
+  }
+  .brand { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+  .brand span { color: var(--accent); }
+  .brand small { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 8px; }
+
+  /* 胶囊 Tab */
+  .tabs {
+    display: flex; background: var(--line); padding: 4px;
+    border-radius: 14px; box-shadow: inset 0 1px 3px rgba(0,0,0,.06);
+  }
+  .tab {
+    padding: 8px 22px; border-radius: 10px; font-size: 14px; font-weight: 700;
+    color: var(--muted); cursor: pointer; transition: all .18s ease; border: none;
+    background: transparent;
+  }
+  .tab.active { background: #fff; color: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+
+  /* 内容区 */
+  .content { flex: 1; overflow: auto; padding: 4px 24px 20px; }
+  .panel { display: none; animation: fade .25s ease; }
+  .panel.show { display: block; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .card {
+    background: var(--card); border-radius: 22px; padding: 22px;
+    box-shadow: 0 10px 30px rgba(15,23,42,.06); border: 1px solid var(--line);
+    margin-bottom: 16px;
+  }
+
+  textarea {
+    width: 100%; height: 96px; padding: 14px; resize: none;
+    border: 2px dashed var(--line); border-radius: 16px; background: var(--field);
+    font-size: 14px; color: var(--ink); font-family: inherit; outline: none;
+    transition: border-color .18s; -webkit-user-select: text; user-select: text;
+  }
+  textarea:focus { border-color: var(--accent); border-style: solid; }
+
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+  .field-name { font-size: 13px; color: var(--muted); font-weight: 600; }
+  .field-name.set { color: var(--accent); }
+
+  label.lbl { font-size: 12px; font-weight: 700; color: var(--ink2); }
+  select {
+    padding: 7px 10px; border-radius: 10px; border: 1px solid var(--line);
+    background: #fff; font-size: 13px; color: var(--ink); font-family: inherit;
+    cursor: pointer; outline: none;
+  }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; height: 6px; border-radius: 4px;
+    background: var(--line); flex: 1; min-width: 100px; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+  }
+  .val { font-family: "Consolas", monospace; font-weight: 800; color: var(--accent); min-width: 30px; }
+
+  /* 按钮 */
+  .btn {
+    border: none; border-radius: 14px; padding: 13px 22px; font-size: 14px;
+    font-weight: 700; cursor: pointer; font-family: inherit; transition: all .16s ease;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn:active { transform: scale(.96); }
+  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 6px 16px rgba(37,99,235,.3); }
+  .btn-primary:hover { background: var(--accent-hi); }
+  .btn-indigo { background: var(--indigo); color: #fff; box-shadow: 0 6px 16px rgba(99,102,241,.3); }
+  .btn-gray { background: var(--field); color: var(--ink2); border: 1px solid var(--line); }
+  .btn-gray:hover { background: var(--line); }
+  .btn-del {
+    border: none; background: #fee2e2; color: var(--warn); cursor: pointer;
+    width: 30px; height: 30px; border-radius: 8px; font-size: 14px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center; transition: all .16s;
+  }
+  .btn-del:hover { background: #fecaca; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; transform: none; }
+  .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+
+  /* 二维码主视区 */
+  .qr-stage {
+    background: #fff; border-radius: 22px; border: 1px solid var(--line);
+    box-shadow: 0 10px 30px rgba(15,23,42,.06);
+    display: flex; align-items: center; justify-content: center;
+    min-height: 300px; padding: 18px; margin-bottom: 12px;
+  }
+  .qr-stage img { max-width: 100%; max-height: 62vh; image-rendering: pixelated; border-radius: 8px; }
+  .qr-stage .placeholder { color: var(--muted); font-size: 14px; }
+
+  /* 状态条 (小字) */
+  .statusbar {
+    font-family: "Consolas", monospace; font-size: 12px; color: var(--muted);
+    padding: 6px 4px; text-align: left;
+  }
+
+  /* 接收进度: 单行紧凑 */
+  .prog-line {
+    display: flex; align-items: center; gap: 12px; margin: 12px 2px 6px;
+  }
+  .recv-file { font-size: 14px; font-weight: 800; color: var(--accent); flex-shrink: 0;
+    max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prog-num { font-family: "Consolas", monospace; font-size: 15px; font-weight: 800;
+    color: var(--ink2); flex-shrink: 0; }
+  .prog-num.ok { color: var(--ok); }
+  .prog-line .pbar-wrap { flex: 1; margin-bottom: 0; }
+  .pbar-wrap { background: var(--line); border-radius: 999px; height: 10px; overflow: hidden; margin-bottom: 10px; }
+  .pbar { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .2s ease; }
+
+  /* 框选遮罩 */
+  #overlay {
+    position: fixed; inset: 0; z-index: 999; display: none;
+    background: #000; cursor: crosshair;
+  }
+  #overlay img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; pointer-events: none; }
+  #ovhint {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    color: #fff; font-size: 15px; font-weight: 700; z-index: 1001;
+    background: rgba(0,0,0,.5); padding: 8px 18px; border-radius: 999px;
+  }
+  #selrect {
+    position: absolute; border: 2px solid #22d3ee; background: rgba(34,211,238,.15);
+    z-index: 1000; display: none;
+  }
+
+  /* 捕获模式切换 */
+  .cap-modes { display: flex; gap: 10px; }
+  .cap-mode {
+    flex: 1; padding: 12px; border-radius: 14px; border: 2px solid var(--line);
+    background: var(--field); color: var(--ink2); font-size: 14px; font-weight: 700;
+    cursor: pointer; font-family: inherit; transition: all .16s ease;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .cap-mode small { font-size: 11px; font-weight: 500; color: var(--muted); }
+  .cap-mode.active { border-color: var(--accent); background: #eff6ff; color: var(--accent); }
+  .cap-mode.active small { color: var(--accent); }
+  .hint-line { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+
+  /* 文本消息列表 */
+  .msg-section { margin-top: 4px; }
+  .msg-title { font-size: 13px; font-weight: 700; color: var(--ink2); margin: 8px 2px; }
+  .msg-list { display: flex; flex-direction: column; gap: 8px; }
+  .msg-item {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 12px 14px; display: flex; align-items: flex-start; gap: 10px;
+    box-shadow: 0 2px 8px rgba(15,23,42,.04); animation: fade .25s ease;
+  }
+  .msg-text {
+    flex: 1; font-size: 14px; color: var(--ink); line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text;
+    max-height: 120px; overflow: auto;
+  }
+  .msg-copy {
+    flex-shrink: 0; width: 32px; height: 32px; border-radius: 9px; border: 1px solid var(--line);
+    background: var(--field); cursor: pointer; display: flex; align-items: center;
+    justify-content: center; transition: all .16s ease; color: var(--ink2);
+  }
+  .msg-copy:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .msg-copy svg { width: 15px; height: 15px; }
+
+  /* toast */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: var(--ink); color: #fff; padding: 12px 22px; border-radius: 14px;
+    font-size: 14px; font-weight: 600; z-index: 2000; opacity: 0;
+    transition: all .3s ease; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">Air<span>Scan</span>-QR <small>屏幕二维码流 · PC → PC</small></div>
+  <div class="tabs">
+    <button class="tab active" id="tab-send" onclick="switchTab('send')">发送</button>
+    <button class="tab" id="tab-recv" onclick="switchTab('recv')">接收</button>
+  </div>
+</div>
+
+<div class="content">
+  <!-- 发送面板 -->
+  <div class="panel show" id="panel-send">
+    <div class="card">
+      <textarea id="inputText" placeholder="输入要发送的文本，或点下方按钮选择文件…"></textarea>
+      <div class="row">
+        <button class="btn btn-gray" onclick="pickFile()">📎 选择文件</button>
+        <button class="btn btn-primary" id="btnSwap" onclick="startSend()" title="用当前文本/文件替换正在广播的内容">🔄 发送</button>
+        <span class="field-name" id="fileName">未选择文件</span>
+        <button class="btn-del" id="btnClearFile" onclick="clearFile()" style="display:none" title="删除附件">✕</button>
+      </div>
+      <div class="row">
+        <label class="lbl">宫格</label>
+        <select id="gridSel">
+          <option value="1">1×1</option>
+          <option value="2" selected>2×2</option>
+          <option value="3">3×3</option>
+        </select>
+        <label class="lbl">纠错</label>
+        <select id="errSel">
+          <option value="l">L 低</option>
+          <option value="m" selected>M 中</option>
+          <option value="q">Q 高</option>
+        </select>
+        <label class="lbl">FPS</label>
+        <input type="range" id="fpsRange" min="1" max="20" value="8"
+               oninput="document.getElementById('fpsVal').innerText=this.value; if(window._sending) api('set_fps', +this.value);">
+        <span class="val" id="fpsVal">8</span>
+      </div>
+      <div class="btn-grid">
+        <button class="btn btn-gray" id="btnStopSend" onclick="stopSend()" disabled>■ 停止</button>
+        <button class="btn btn-primary" id="btnSend" onclick="startSend()">🚀 开始广播</button>
+      </div>
+    </div>
+
+    <div class="qr-stage" id="qrStage">
+      <span class="placeholder">二维码将显示在这里</span>
+    </div>
+    <div class="statusbar" id="sendStatus">就绪</div>
+  </div>
+
+  <!-- 接收面板 -->
+  <div class="panel" id="panel-recv">
+    <div class="card">
+      <div class="cap-modes">
+        <button class="cap-mode active" id="mode-region" onclick="setMode('region')">🖼️ 框选区域</button>
+        <button class="cap-mode" id="mode-window" onclick="setMode('window')">🪟 锁定窗口<small>后台运行</small></button>
+      </div>
+
+      <!-- 区域模式 -->
+      <div class="mode-body" id="body-region">
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-indigo" onclick="selectRegion()">① 框选区域</button>
+          <span class="field-name" id="regionName">未框选</span>
+        </div>
+      </div>
+
+      <!-- 窗口模式: 下拉列表选窗 -->
+      <div class="mode-body" id="body-window" style="display:none">
+        <div class="row" style="margin-top:14px">
+          <select id="winSel" style="flex:1" onchange="onWinPick()">
+            <option value="">① 选择要监控的窗口…</option>
+          </select>
+          <button class="btn btn-gray" onclick="refreshWindows()">↻ 刷新</button>
+        </div>
+        <div class="hint-line">锁定窗口后即使它被遮挡或在后台，也能持续接收（发送端窗口不要最小化）。</div>
+      </div>
+
+      <div class="row" style="margin-top:16px">
+        <button class="btn btn-primary" id="btnRecv" onclick="startRecv()" disabled>② 开始接收</button>
+        <button class="btn btn-gray" id="btnStopRecv" onclick="stopRecv()" disabled>■ 停止</button>
+      </div>
+    </div>
+
+    <!-- 进度: 单行紧凑显示 (文件名 + 进度数字 + 进度条) -->
+    <div class="prog-line">
+      <span class="recv-file" id="recvFile"></span>
+      <span class="prog-num" id="progBig">—</span>
+      <div class="pbar-wrap"><div class="pbar" id="pbar"></div></div>
+    </div>
+    <div class="statusbar" id="recvStatus">就绪 · 选择捕获方式后开始接收</div>
+
+    <!-- 文本消息区 (占据主空间) -->
+    <div class="msg-section" id="msgSection" style="display:none">
+      <div class="msg-title">📥 收到的文本消息</div>
+      <div class="msg-list" id="msgList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 框选遮罩 -->
+<div id="overlay">
+  <img id="ovimg">
+  <div id="ovhint">拖拽框选发送端二维码区域 · Esc 取消</div>
+  <div id="selrect"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  /* --- 与 Python 通信封装 --- */
+  function api(name, ...args) {
+    return window.pywebview.api[name](...args);
+  }
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.innerText = msg; t.classList.add('show');
+    clearTimeout(window._tt);
+    window._tt = setTimeout(() => t.classList.remove('show'), 2600);
+  }
+
+  function switchTab(t) {
+    document.getElementById('tab-send').classList.toggle('active', t === 'send');
+    document.getElementById('tab-recv').classList.toggle('active', t === 'recv');
+    document.getElementById('panel-send').classList.toggle('show', t === 'send');
+    document.getElementById('panel-recv').classList.toggle('show', t === 'recv');
+  }
+
+  /* --- 发送 --- */
+  async function pickFile() {
+    const name = await api('pick_file');
+    if (name) {
+      document.getElementById('fileName').innerText = name;
+      document.getElementById('fileName').classList.add('set');
+      document.getElementById('btnClearFile').style.display = 'inline-flex';
+    }
+  }
+  async function clearFile() {
+    await api('clear_file');
+    document.getElementById('fileName').innerText = '未选择文件';
+    document.getElementById('fileName').classList.remove('set');
+    document.getElementById('btnClearFile').style.display = 'none';
+  }
+  async function startSend() {
+    const text = document.getElementById('inputText').value;
+    const grid = +document.getElementById('gridSel').value;
+    const err = document.getElementById('errSel').value;
+    const fps = +document.getElementById('fpsRange').value;
+    const res = await api('start_send', text, grid, err, fps);
+    if (res && res.error) { toast(res.error); return; }
+    // 后台正在构建 (读文件/切片/编码), 立即给反馈, 等 onSendReady 出图。
+    window._sending = true;
+    document.getElementById('btnSend').disabled = true;
+    document.getElementById('btnStopSend').disabled = false;
+    document.getElementById('sendStatus').innerText = '⏳ 正在处理…';
+    document.getElementById('qrStage').innerHTML =
+      '<span class="placeholder">⏳ 正在处理，请稍候…</span>';
+  }
+  function onSendReady() { /* 首帧到来时 pushQR 会覆盖占位 */ }
+  function onSendError(msg) {
+    toast(msg);
+    window._sending = false;
+    document.getElementById('btnSend').disabled = false;
+    document.getElementById('btnStopSend').disabled = true;
+    document.getElementById('sendStatus').innerText = '就绪';
+    document.getElementById('qrStage').innerHTML =
+      '<span class="placeholder">二维码将显示在这里</span>';
+  }
+  async function stopSend() {
+    await api('stop_send');
+    window._sending = false;
+    document.getElementById('btnSend').disabled = false;
+    document.getElementById('btnStopSend').disabled = true;
+    document.getElementById('sendStatus').innerText = '已停止';
+  }
+  // Python 推帧
+  function pushQR(dataurl, status) {
+    const stage = document.getElementById('qrStage');
+    let img = stage.querySelector('img');
+    if (!img) { stage.innerHTML = ''; img = document.createElement('img'); stage.appendChild(img); }
+    img.src = dataurl;
+    document.getElementById('sendStatus').innerText = status;
+  }
+
+  /* --- 接收: 框选区域 (全屏 overlay) --- */
+  let ov = { active: false, sx: 0, sy: 0, natW: 0, natH: 0 };
+  const overlay = document.getElementById('overlay');
+  const selrect = document.getElementById('selrect');
+  const ovhint = document.getElementById('ovhint');
+
+  async function selectRegion() {
+    const res = await api('grab_fullscreen');   // 先截图(此时还是小窗, 能拍到桌面目标)
+    if (!res) { toast('截屏失败'); return; }
+    await api('enter_overlay');                 // 再全屏, 使遮罩铺满真实屏幕、坐标 1:1
+    ov.natW = res.w; ov.natH = res.h;
+    document.getElementById('ovimg').src = res.img;
+    ovhint.innerText = '拖拽框选发送端二维码区域 · Esc 取消';
+    selrect.style.display = 'none';
+    overlay.style.display = 'block';
+  }
+
+  // 视口坐标 -> 屏幕自然像素
+  function toNative(cx, cy) {
+    return [cx * ov.natW / window.innerWidth, cy * ov.natH / window.innerHeight];
+  }
+
+  overlay.addEventListener('mousedown', e => {
+    ov.active = true; ov.sx = e.clientX; ov.sy = e.clientY;
+    selrect.style.display = 'block';
+    selrect.style.left = e.clientX + 'px'; selrect.style.top = e.clientY + 'px';
+    selrect.style.width = '0px'; selrect.style.height = '0px';
+  });
+  overlay.addEventListener('mousemove', e => {
+    if (!ov.active) return;
+    const l = Math.min(ov.sx, e.clientX), t = Math.min(ov.sy, e.clientY);
+    selrect.style.left = l + 'px'; selrect.style.top = t + 'px';
+    selrect.style.width = Math.abs(e.clientX - ov.sx) + 'px';
+    selrect.style.height = Math.abs(e.clientY - ov.sy) + 'px';
+  });
+  overlay.addEventListener('mouseup', async e => {
+    if (!ov.active) return;
+    ov.active = false;
+    overlay.style.display = 'none';
+    await api('exit_overlay');                   // 恢复窗口
+    const [l0, t0] = toNative(Math.min(ov.sx, e.clientX), Math.min(ov.sy, e.clientY));
+    const [r0, b0] = toNative(Math.max(ov.sx, e.clientX), Math.max(ov.sy, e.clientY));
+    const l = Math.round(l0), t = Math.round(t0), r = Math.round(r0), b = Math.round(b0);
+    if (r - l < 20 || b - t < 20) { toast('选区太小'); return; }
+    await api('set_region', l, t, r, b);
+    window._regionSet = true;
+    document.getElementById('regionName').innerText = `${r - l}×${b - t}`;
+    document.getElementById('regionName').classList.add('set');
+    document.getElementById('btnRecv').disabled = false;
+  });
+  document.addEventListener('keydown', async e => {
+    if (e.key === 'Escape' && overlay.style.display === 'block') {
+      overlay.style.display = 'none'; ov.active = false;
+      await api('exit_overlay');                 // 取消也恢复窗口
+    }
+  });
+
+  /* --- 接收: 启停 --- */
+  async function startRecv() {
+    await api('start_recv');
+    document.getElementById('btnRecv').disabled = true;
+    document.getElementById('btnStopRecv').disabled = false;
+    document.getElementById('recvStatus').innerText = '接收中… 对准发送端二维码';
+  }
+  async function stopRecv() {
+    await api('stop_recv');
+    document.getElementById('btnRecv').disabled = false;
+    document.getElementById('btnStopRecv').disabled = true;
+    document.getElementById('recvStatus').innerText = '已停止';
+  }
+  // Python 推送
+  function onMeta(name, total, isText) {
+    document.getElementById('recvFile').innerText = isText ? '📝 文本消息' : '📄 ' + name;
+    document.getElementById('progBig').innerText = '0/' + total;
+    document.getElementById('progBig').classList.remove('ok');
+    document.getElementById('pbar').style.width = '0%';
+  }
+  function onProgress(got, total) {
+    document.getElementById('progBig').innerText = got + '/' + total;
+    document.getElementById('pbar').style.width = (total ? got / total * 100 : 0) + '%';
+    document.getElementById('recvStatus').innerText = `接收中… ${got}/${total} · 缺 ${total - got}`;
+  }
+  function onComplete(ok, isText, info) {
+    const big = document.getElementById('progBig');
+    if (!ok) { document.getElementById('recvStatus').innerText = '⚠️ 校验失败, 等待重传…'; return; }
+    if (isText) {
+      // 文本消息静默处理: 内容由 addMessage 写到上方展示区 + 列表 (需求1/4)。
+      document.getElementById('recvStatus').innerText = '✅ 已接收文本并写入剪贴板 · 等待下一次发送';
+    } else {
+      big.classList.add('ok');
+      big.innerText = '✓ 完成';
+      document.getElementById('recvStatus').innerText = info || '✅ 已保存 · 等待下一次发送';
+    }
+  }
+
+  /* --- 捕获模式切换 --- */
+  async function setMode(m) {
+    document.getElementById('mode-region').classList.toggle('active', m === 'region');
+    document.getElementById('mode-window').classList.toggle('active', m === 'window');
+    document.getElementById('body-region').style.display = m === 'region' ? 'block' : 'none';
+    document.getElementById('body-window').style.display = m === 'window' ? 'block' : 'none';
+    if (m === 'window') { await refreshWindows(); }
+    document.getElementById('btnRecv').disabled =
+      m === 'window' ? !window._winSet : !window._regionSet;
+  }
+
+  /* --- 窗口选择: 下拉列表 (方案 C) --- */
+  async function refreshWindows() {
+    const wins = (await api('list_windows')) || [];
+    const sel = document.getElementById('winSel');
+    sel.innerHTML = '<option value="">① 选择要监控的窗口…</option>';
+    wins.forEach(w => {
+      const o = document.createElement('option');
+      o.value = w.hwnd;
+      o.text = `${w.title}  (${w.w}×${w.h})`;
+      sel.appendChild(o);
+    });
+  }
+  async function onWinPick() {
+    const hwnd = document.getElementById('winSel').value;
+    if (!hwnd) { window._winSet = false; document.getElementById('btnRecv').disabled = true; return; }
+    await api('set_window', +hwnd);
+    window._winSet = true;
+    document.getElementById('btnRecv').disabled = false;
+  }
+
+  /* --- 文本消息列表 --- */
+  function addMessage(text) {
+    // 需求4: 消息列表最新在最上 (prepend), 老的往下排。
+    document.getElementById('msgSection').style.display = 'block';
+    const list = document.getElementById('msgList');
+    const item = document.createElement('div');
+    item.className = 'msg-item';
+    const body = document.createElement('div');
+    body.className = 'msg-text';
+    body.innerText = text;
+    const btn = document.createElement('button');
+    btn.className = 'msg-copy';
+    btn.title = '复制';
+    btn.innerHTML = '📋';
+    btn.onclick = async () => {
+      await api('copy_text', text);
+      btn.innerHTML = '✓';
+      setTimeout(() => { btn.innerHTML = '📋'; }, 1200);
+    };
+    item.appendChild(body);
+    item.appendChild(btn);
+    list.insertBefore(item, list.firstChild);
+    list.scrollTop = 0;
+  }
+</script>
+</body>
+</html>
