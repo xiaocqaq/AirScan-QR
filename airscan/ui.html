@@ -49,6 +49,15 @@
           <input class="number-input" type="number" id="startIndex" min="1" value="1"
             inputmode="numeric" title="从指定帧开始顺序循环发送">
         </div>
+        <details class="resend-tools">
+          <summary>缺失序号补发</summary>
+          <div class="resend-row">
+            <input class="resend-input" id="resendSpec" type="text"
+              aria-label="缺失序号" placeholder="例如 181, 283, 546-559">
+            <button class="btn btn-gray" id="btnResend" onclick="startResend()" disabled>补发缺失帧</button>
+            <button class="btn btn-gray" id="btnResumeAll" onclick="resumeAllFrames()" disabled>恢复全部帧</button>
+          </div>
+        </details>
         <div class="btn-grid">
           <button class="btn btn-gray" id="btnPauseSend" onclick="pauseSend()" disabled>暂停</button>
           <button class="btn btn-primary" id="btnSend" onclick="startOrResumeSend()">开始广播</button>

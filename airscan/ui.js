@@ -2,11 +2,9 @@ const GRID_FPS_DEFAULTS = { 1: 8, 2: 5, 3: 3 };
 window._fpsTouched = false;
 window._sendPaused = false;
 window._qrFocus = false;
-
 function api(name, ...args) {
   return window.pywebview.api[name](...args);
 }
-
 function toast(msg) {
   const element = document.getElementById('toast');
   element.innerText = msg;
@@ -14,7 +12,6 @@ function toast(msg) {
   clearTimeout(window._toastTimer);
   window._toastTimer = setTimeout(() => element.classList.remove('show'), 2600);
 }
-
 function switchTab(tab) {
   const sending = tab === 'send';
   document.getElementById('tab-send').classList.toggle('active', sending);
@@ -27,7 +24,6 @@ function switchTab(tab) {
     loadDownloadDir();
   }
 }
-
 function setQrFocus(enabled) {
   window._qrFocus = enabled;
   document.body.classList.toggle('qr-focus', enabled);
@@ -38,9 +34,7 @@ function setQrFocus(enabled) {
   button.title = label;
   button.innerText = enabled ? '▼' : '▲';
 }
-
 function toggleQrFocus() { setQrFocus(!window._qrFocus); }
-
 async function pickFile() {
   const name = await api('pick_file');
   if (!name) return;
@@ -49,7 +43,6 @@ async function pickFile() {
   label.classList.add('set');
   document.getElementById('btnClearFile').style.display = 'inline-flex';
 }
-
 async function clearFile() {
   await api('clear_file');
   const label = document.getElementById('fileName');
@@ -57,13 +50,11 @@ async function clearFile() {
   label.classList.remove('set');
   document.getElementById('btnClearFile').style.display = 'none';
 }
-
 function onFpsInput(input) {
   window._fpsTouched = true;
   document.getElementById('fpsVal').innerText = input.value;
   if (window._sending) api('set_fps', +input.value);
 }
-
 function onGridChange() {
   if (window._fpsTouched) return;
   const grid = +document.getElementById('gridSel').value;
@@ -71,7 +62,6 @@ function onGridChange() {
   document.getElementById('fpsRange').value = fps;
   document.getElementById('fpsVal').innerText = fps;
 }
-
 async function startSend() {
   const text = document.getElementById('inputText').value;
   const grid = +document.getElementById('gridSel').value;
@@ -89,26 +79,29 @@ async function startSend() {
   document.getElementById('btnSend').disabled = true;
   document.getElementById('btnSend').innerText = '开始广播';
   document.getElementById('btnPauseSend').disabled = false;
+  document.getElementById('btnResend').disabled = true;
+  document.getElementById('btnResumeAll').disabled = true;
   document.getElementById('sendStatus').innerText = '正在处理...';
   document.getElementById('qrStage').innerHTML = '<span class="placeholder">正在处理，请稍候...</span>';
 }
-
 function onSendReady(total, startIndex) {
   const input = document.getElementById('startIndex');
   input.max = total;
   input.value = startIndex;
+  document.getElementById('btnResend').disabled = false;
+  document.getElementById('btnResumeAll').disabled = true;
 }
-
 function onSendError(message) {
   toast(message);
   window._sending = false;
   window._sendPaused = false;
   document.getElementById('btnSend').disabled = false;
   document.getElementById('btnPauseSend').disabled = true;
+  document.getElementById('btnResend').disabled = true;
+  document.getElementById('btnResumeAll').disabled = true;
   document.getElementById('sendStatus').innerText = '就绪';
   document.getElementById('qrStage').innerHTML = '<span class="placeholder">二维码将显示在这里</span>';
 }
-
 async function startOrResumeSend() {
   if (window._sendPaused) {
     await resumeSend();
@@ -116,7 +109,6 @@ async function startOrResumeSend() {
   }
   await startSend();
 }
-
 async function pauseSend() {
   await api('pause_send');
   window._sending = false;
@@ -126,7 +118,6 @@ async function pauseSend() {
   document.getElementById('btnPauseSend').disabled = true;
   document.getElementById('sendStatus').innerText = '已暂停 · 可修改起始序号后继续';
 }
-
 async function resumeSend() {
   const startIndex = Math.max(1, +document.getElementById('startIndex').value || 1);
   const result = await api('resume_send', startIndex);
@@ -141,7 +132,31 @@ async function resumeSend() {
   document.getElementById('btnPauseSend').disabled = false;
   document.getElementById('startIndex').value = result.start_index;
 }
-
+async function applyResend(spec) {
+  const startIndex = Math.max(1, +document.getElementById('startIndex').value || 1);
+  const result = await api('resume_send', startIndex, spec);
+  if (result && result.error) {
+    toast(result.error);
+    return;
+  }
+  window._sending = true;
+  window._sendPaused = false;
+  document.getElementById('btnSend').disabled = true;
+  document.getElementById('btnPauseSend').disabled = false;
+  document.getElementById('btnResumeAll').disabled = !result.selection_count;
+  document.getElementById('sendStatus').innerText = result.selection_count
+    ? `补发模式 · 循环发送 ${result.selection_count} 个缺失帧`
+    : '已恢复全部帧顺序广播';
+}
+async function startResend() {
+  const spec = document.getElementById('resendSpec').value.trim();
+  if (!spec) {
+    toast('请粘贴缺失序号');
+    return;
+  }
+  await applyResend(spec);
+}
+async function resumeAllFrames() { await applyResend(''); }
 function pushQR(dataurl, status) {
   const stage = document.getElementById('qrStage');
   let image = stage.querySelector('img');
@@ -154,7 +169,6 @@ function pushQR(dataurl, status) {
   image.src = dataurl;
   document.getElementById('sendStatus').innerText = status;
 }
-
 async function startRecv() {
   const result = await api('start_recv');
   if (result && result.error) {
@@ -166,7 +180,6 @@ async function startRecv() {
   document.getElementById('btnPauseRecv').disabled = false;
   document.getElementById('recvStatus').innerText = result.resumed ? '继续接收中...' : '接收中...';
 }
-
 async function pauseRecv() {
   await api('pause_recv');
   document.getElementById('btnRecv').disabled = false;
@@ -174,7 +187,6 @@ async function pauseRecv() {
   document.getElementById('btnPauseRecv').disabled = true;
   document.getElementById('recvStatus').innerText = '已暂停 · 当前进度已保留';
 }
-
 async function resetRecv() {
   if (!window.confirm('确定清空当前接收进度吗？')) return;
   await api('reset_recv');
@@ -188,7 +200,6 @@ async function resetRecv() {
   document.getElementById('pbar').style.width = '0%';
   document.getElementById('recvStatus').innerText = '任务已重置';
 }
-
 function onMeta(name, total, isText) {
   document.getElementById('recvFile').innerText = isText ? '文本消息' : name;
   document.getElementById('progBig').innerText = `0/${total}`;
@@ -197,13 +208,11 @@ function onMeta(name, total, isText) {
   document.getElementById('btnMissing').disabled = false;
   document.getElementById('btnResetRecv').disabled = false;
 }
-
 function onProgress(got, total) {
   document.getElementById('progBig').innerText = `${got}/${total}`;
   document.getElementById('pbar').style.width = `${total ? got / total * 100 : 0}%`;
   document.getElementById('recvStatus').innerText = `接收中... ${got}/${total} · 缺 ${total - got}`;
 }
-
 function onComplete(ok, isText, info) {
   const progress = document.getElementById('progBig');
   if (!ok) {
@@ -218,7 +227,6 @@ function onComplete(ok, isText, info) {
   progress.innerText = '完成';
   document.getElementById('recvStatus').innerText = info || '已保存 · 等待下一次发送';
 }
-
 async function showMissing() {
   const summary = await api('get_missing');
   document.getElementById('missingMeta').innerText = summary.total
@@ -228,20 +236,16 @@ async function showMissing() {
   document.getElementById('missingModal').classList.add('show');
   document.querySelector('#missingModal .modal-close').focus();
 }
-
 function closeMissing() {
   document.getElementById('missingModal').classList.remove('show');
 }
-
 function onMissingBackdrop(event) {
   if (event.target.id === 'missingModal') closeMissing();
 }
-
 async function copyMissing() {
   await api('copy_text', document.getElementById('missingRanges').innerText);
   toast('缺失序号已复制');
 }
-
 async function refreshWindows() {
   const windows = (await api('list_windows')) || [];
   const select = document.getElementById('winSel');
@@ -253,21 +257,17 @@ async function refreshWindows() {
     select.appendChild(option);
   });
 }
-
 async function onWinPick() {
   const hwnd = document.getElementById('winSel').value;
   document.getElementById('btnRecv').disabled = !hwnd;
   if (hwnd) await api('set_window', +hwnd);
 }
-
 async function loadDownloadDir() {
   document.getElementById('downloadDir').innerText = await api('get_download_dir');
 }
-
 async function openDownloadDir() {
   await api('open_download_dir');
 }
-
 function addMessage(text) {
   document.getElementById('msgSection').style.display = 'block';
   const item = document.createElement('div');
@@ -287,7 +287,6 @@ function addMessage(text) {
   const list = document.getElementById('msgList');
   list.insertBefore(item, list.firstChild);
 }
-
 document.getElementById('inputText').addEventListener('keydown', event => {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
   event.preventDefault();

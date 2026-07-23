@@ -12,7 +12,7 @@ from PIL import Image
 
 from . import protocol as P
 from . import wincap
-from .sender import Sender, load_file, load_text
+from .sender import Sender, load_file, load_text, parse_frame_selection
 from .receiver import Receiver
 from .storage import default_download_dir, save_received_file, set_clipboard
 
@@ -34,11 +34,7 @@ def _js_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
-# 关键: window 存成模块级变量, 绝不挂到 Api 实例属性上。
-# pywebview 会递归遍历 js_api 对象的所有属性来暴露方法, 若 Api 持有 window
-# (内部是 .NET 对象), 遍历时会触发 Rectangle.op_Equality 比较 -> pythonnet
-# 无限递归, 主线程 CPU 打满, 窗口"未响应"。模块级变量不会被 introspect, 版本无关。
-_window = None
+_window = None  # 保持模块级，避免 pywebview introspect 内部 .NET 对象。
 
 
 def _js(code: str):
@@ -48,21 +44,18 @@ def _js(code: str):
 
 class Api:
     def __init__(self):
-        # 发送态
         self.sender = None
         self._send_stop = threading.Event()
         self._send_thread = None
         self.fps = 8
         self._picked_file = None
         self._send_start_index = 1
-        # 接收态 (仅窗口捕获)
         self.receiver = None
         self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
         self._recv_thread = None
         self._messages = []       # 已接收的文本消息 (供逐条复制)
 
-    # ---------------- 发送 ----------------
     def pick_file(self):
         res = _window.create_file_dialog(webview.OPEN_DIALOG)
         if not res:
@@ -71,21 +64,16 @@ class Api:
         return os.path.basename(self._picked_file)
 
     def clear_file(self):
-        """删除已选附件。"""
         self._picked_file = None
         return {"ok": True}
 
     def start_send(self, text, grid, err, fps, start_index=1):
-        # 只做轻量校验后立即返回, 真正的构建 (读文件/切片) 放后台线程,
-        # 避免大文件在主线程阻塞导致 UI "未响应"。
         if self._picked_file:
             src = ("file", self._picked_file)
         elif text and text.strip():
             src = ("text", text)
         else:
             return {"error": "请先输入文本或选择文件"}
-        # 需求3: 广播中再次点"发送"= 热切换。先停掉正在跑的广播线程并等它退出,
-        # 再用新内容重启, 避免两个 _send_loop 同时往 UI 推帧。
         self._send_stop.set()
         old = self._send_thread
         if old and old.is_alive() and old is not threading.current_thread():
@@ -129,18 +117,34 @@ class Api:
             old.join()
         return {"ok": True}
 
-    def resume_send(self, start_index):
+    def resume_send(self, start_index, resend_spec=None):
         if not self.sender:
             return {"error": "当前没有可继续的广播任务"}
+        selection = None
+        if resend_spec is not None:
+            try:
+                selection = (parse_frame_selection(resend_spec, self.sender.total)
+                             if str(resend_spec).strip() else [])
+            except ValueError as error:
+                return {"error": str(error)}
         requested = max(1, int(start_index))
-        if requested != self._send_start_index:
+        if selection is not None:
+            self.pause_send()
+            count = (self.sender.set_resend_indices(selection) if selection
+                     else (self.sender.clear_resend_indices() or 0))
+        elif requested != self._send_start_index:
             self._send_start_index = self.sender.seek(requested)
+            count = 0
+        else:
+            count = len(getattr(self.sender, "_resend_indices", ()) or ())
         if self._send_thread and self._send_thread.is_alive():
-            return {"ok": True, "start_index": self._send_start_index}
+            return {"ok": True, "start_index": self._send_start_index,
+                    "selection_count": count}
         self._send_stop.clear()
         self._send_thread = threading.Thread(target=self._send_loop, daemon=True)
         self._send_thread.start()
-        return {"ok": True, "start_index": self._send_start_index}
+        return {"ok": True, "start_index": self._send_start_index,
+                "selection_count": count}
 
     def stop_send(self):
         """兼容旧前端：停止语义降级为暂停，不销毁 Sender。"""
@@ -155,13 +159,10 @@ class Api:
             _js(f"pushQR({_js_str(dataurl)}, {_js_str(status)})")
             time.sleep(1.0 / max(1, self.fps))
 
-    # ---------------- 接收 (仅窗口捕获) ----------------
     def list_windows(self):
-        """返回可选窗口列表, 供前端下拉选择。"""
         return wincap.list_windows()
 
     def set_window(self, hwnd):
-        """锁定某个窗口做后台捕获。"""
         self.hwnd = int(hwnd)
         return {"ok": True}
 
@@ -270,8 +271,6 @@ class Api:
 
 
 def main():
-    # 设为 per-monitor DPI-aware: 否则高分屏下系统会虚拟化坐标 (如 2560 缩成 1920),
-    # 导致 ImageGrab 截图与 GetWindowRect 窗口坐标错位, 框选/选窗点不准。
     if sys.platform == "win32":
         try:
             from ctypes import windll
