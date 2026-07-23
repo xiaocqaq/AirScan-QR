@@ -12,6 +12,46 @@ function toast(msg) {
   clearTimeout(window._toastTimer);
   window._toastTimer = setTimeout(() => element.classList.remove('show'), 2600);
 }
+/* --- 主题: 亮 / 暗 / 跟随系统 --- */
+const THEME_KEY = 'airscan-theme';
+const THEME_ORDER = ['system', 'light', 'dark'];
+const THEME_META = {
+  system: { icon: '🌓', label: '跟随系统' },
+  light: { icon: '☀️', label: '亮色' },
+  dark: { icon: '🌙', label: '暗色' },
+};
+function systemPrefersDark() {
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+function applyTheme(mode) {
+  const dark = mode === 'dark' || (mode === 'system' && systemPrefersDark());
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  const btn = document.getElementById('themeToggle');
+  if (btn) {
+    btn.textContent = THEME_META[mode].icon;
+    btn.title = '主题: ' + THEME_META[mode].label + '（点击切换）';
+  }
+}
+function currentThemeMode() {
+  const saved = localStorage.getItem(THEME_KEY);
+  return THEME_ORDER.includes(saved) ? saved : 'system';
+}
+function cycleTheme() {
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(currentThemeMode()) + 1) % THEME_ORDER.length];
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+  toast('主题: ' + THEME_META[next].label);
+}
+function initTheme() {
+  applyTheme(currentThemeMode());
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (currentThemeMode() === 'system') applyTheme('system');
+    });
+  }
+}
+initTheme();
+
 function switchTab(tab) {
   const sending = tab === 'send';
   document.getElementById('tab-send').classList.toggle('active', sending);
@@ -90,6 +130,17 @@ function onSendReady(total, startIndex) {
   input.value = startIndex;
   document.getElementById('btnResend').disabled = false;
   document.getElementById('btnResumeAll').disabled = true;
+}
+function onSendAutoStopped(cycles) {
+  // 默认展示达到阈值 (max 5遍/30s) 后自动暂停 (非停止): 保留任务与当前位置,
+  // 点“继续广播”从暂停处接着循环, 接收端漏帧仍可补收。
+  window._sending = false;
+  window._sendPaused = true;
+  document.getElementById('btnSend').disabled = false;
+  document.getElementById('btnSend').innerText = '继续广播';
+  document.getElementById('btnPauseSend').disabled = true;
+  document.getElementById('sendStatus').innerText =
+    '已播 ' + cycles + ' 遍, 自动暂停 · 点“继续广播”可继续播放';
 }
 function onSendError(message) {
   toast(message);
@@ -213,7 +264,7 @@ function onProgress(got, total) {
   document.getElementById('pbar').style.width = `${total ? got / total * 100 : 0}%`;
   document.getElementById('recvStatus').innerText = `接收中... ${got}/${total} · 缺 ${total - got}`;
 }
-function onComplete(ok, isText, info) {
+function onComplete(ok, isText, info, path, filename) {
   const progress = document.getElementById('progBig');
   if (!ok) {
     document.getElementById('recvStatus').innerText = info || '校验失败，等待重传...';
@@ -226,6 +277,29 @@ function onComplete(ok, isText, info) {
   progress.classList.add('ok');
   progress.innerText = '完成';
   document.getElementById('recvStatus').innerText = info || '已保存 · 等待下一次发送';
+  if (path) addFile(path, filename);
+}
+function addFile(path, filename) {
+  document.getElementById('fileSection').style.display = 'block';
+  const item = document.createElement('div');
+  item.className = 'msg-item file-item';
+  item.title = '点击用默认应用打开：' + path;
+  const body = document.createElement('div');
+  body.className = 'msg-text file-name';
+  body.innerText = filename || path;
+  const openBtn = document.createElement('button');
+  openBtn.className = 'msg-copy';
+  openBtn.title = '打开';
+  openBtn.innerText = '打开';
+  const open = async () => {
+    const result = await api('open_file', path);
+    if (result && result.error) toast(result.error);
+  };
+  openBtn.onclick = open;
+  body.onclick = open;
+  item.append(body, openBtn);
+  const list = document.getElementById('fileList');
+  list.insertBefore(item, list.firstChild);
 }
 async function showMissing() {
   const summary = await api('get_missing');

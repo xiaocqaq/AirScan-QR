@@ -35,6 +35,8 @@ def _js_str(s: str) -> str:
 
 
 _window = None  # 保持模块级，避免 pywebview introspect 内部 .NET 对象。
+_tray = None    # 托盘图标 (pystray.Icon)
+_really_quit = False  # True 时 closing 事件放行真正退出
 
 
 def _js(code: str):
@@ -150,13 +152,28 @@ class Api:
         """兼容旧前端：停止语义降级为暂停，不销毁 Sender。"""
         return self.pause_send()
 
+    # 默认展示阈值: 循环到 max(5 遍, 30 秒) 取较长者后自动暂停 (非停止, 保留任务)。
+    AUTO_STOP_CYCLES = 5
+    AUTO_STOP_SECONDS = 30.0
+
     def _send_loop(self):
+        start = time.monotonic()
+        base_frames = self.sender.sent_frames if self.sender else 0
         while not self._send_stop.is_set() and self.sender:
             s = self.sender
             img = s.next_image()
             dataurl = _img_to_dataurl(img)
             status = f"[{s.name}] {s.status()} · 已广播 {s.sent_frames} 帧"
             _js(f"pushQR({_js_str(dataurl)}, {_js_str(status)})")
+            # 补发模式持续循环不自动停; 默认广播达到 max(5遍, 30s) 后自动暂停,
+            # 仅结束循环线程, 保留 Sender 与 _pos, 点“继续广播”从暂停处续播。
+            if not s._resend_indices and s.total:
+                cycles = (s.sent_frames - base_frames) / s.total
+                elapsed = time.monotonic() - start
+                if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
+                    self._send_stop.set()
+                    _js(f"onSendAutoStopped({int(cycles)})")
+                    break
             time.sleep(1.0 / max(1, self.fps))
 
     def list_windows(self):
@@ -221,6 +238,16 @@ class Api:
         os.startfile(directory)
         return {"ok": True, "path": str(directory)}
 
+    def open_file(self, path):
+        """用系统默认应用打开已下载的文件。"""
+        try:
+            if not path or not os.path.exists(path):
+                return {"ok": False, "error": "文件不存在"}
+            os.startfile(path)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def _recv_loop(self):
         while not self._recv_stop.is_set():
             try:
@@ -256,7 +283,8 @@ class Api:
                 path = save_received_file(task.path, task.file_size, task.name)
                 task.cleanup()
                 info = f"已保存: {path} · 等待下一次发送"
-                _js(f"onComplete(true, false, {_js_str(info)})")
+                _js(f"onComplete(true, false, {_js_str(info)}, "
+                    f"{_js_str(str(path))}, {_js_str(os.path.basename(str(path)))})")
             except Exception as e:
                 info = f"保存失败: {e} · 临时文件已保留"
                 _js(f"onComplete(false, false, {_js_str(info)})")
@@ -268,6 +296,63 @@ class Api:
             return {"ok": True}
         except Exception:
             return {"ok": False}
+
+
+def _tray_image():
+    """托盘图标: 优先用打包的 icon.ico, 失败则画一个蓝底 QR 占位。"""
+    from PIL import Image as _Image
+    try:
+        return _Image.open(_resource_path("icon.ico"))
+    except Exception:
+        from PIL import ImageDraw
+        img = _Image.new("RGB", (64, 64), "#2563eb")
+        d = ImageDraw.Draw(img)
+        d.rectangle([14, 14, 26, 26], fill="#ffffff")
+        d.rectangle([38, 14, 50, 26], fill="#ffffff")
+        d.rectangle([14, 38, 26, 50], fill="#ffffff")
+        return img
+
+
+def _show_window(*_):
+    if _window is not None:
+        _window.show()
+
+
+def _quit_app(*_):
+    """从托盘退出: 置标志, 停托盘, 销毁窗口 (closing 会放行)。"""
+    global _really_quit
+    _really_quit = True
+    if _tray is not None:
+        _tray.stop()
+    if _window is not None:
+        _window.destroy()
+
+
+def _on_closing():
+    """拦截关闭: 非真正退出时隐藏到托盘, 返回 False 取消关闭。"""
+    if _really_quit:
+        return True
+    if _window is not None:
+        _window.hide()
+    return False
+
+
+def _start_tray():
+    """在独立线程运行系统托盘 (icon.run 会阻塞)。"""
+    import pystray
+    from pystray import MenuItem as Item
+
+    global _tray
+    _tray = pystray.Icon(
+        "AirScan-QR",
+        _tray_image(),
+        "AirScan-QR",
+        menu=pystray.Menu(
+            Item("显示主窗口", _show_window, default=True),
+            Item("退出", _quit_app),
+        ),
+    )
+    threading.Thread(target=_tray.run, daemon=True).start()
 
 
 def main():
@@ -292,6 +377,8 @@ def main():
     )
     global _window
     _window = window
+    window.events.closing += _on_closing
+    _start_tray()
     webview.start()
 
 

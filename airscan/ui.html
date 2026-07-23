@@ -9,10 +9,14 @@
 <body>
   <header class="topbar">
     <div class="brand">Air<span>Scan</span>-QR <small>屏幕二维码流 · PC → PC</small></div>
-    <nav class="tabs" aria-label="工作模式">
-      <button class="tab active" id="tab-send" onclick="switchTab('send')">发送</button>
-      <button class="tab" id="tab-recv" onclick="switchTab('recv')">接收</button>
-    </nav>
+    <div class="topbar-right">
+      <nav class="tabs" aria-label="工作模式">
+        <button class="tab active" id="tab-send" onclick="switchTab('send')">发送</button>
+        <button class="tab" id="tab-recv" onclick="switchTab('recv')">接收</button>
+      </nav>
+      <button class="theme-toggle" id="themeToggle" onclick="cycleTheme()"
+        title="主题: 跟随系统" aria-label="切换主题">🌓</button>
+    </div>
   </header>
 
   <main class="content">
@@ -100,6 +104,10 @@
         <div class="pbar-wrap"><div class="pbar" id="pbar"></div></div>
       </div>
       <div class="statusbar" id="recvStatus">就绪 · 选择窗口后开始接收</div>
+      <section class="msg-section" id="fileSection" style="display:none">
+        <div class="msg-title">收到的文件（点击用默认应用打开）</div>
+        <div class="msg-list" id="fileList"></div>
+      </section>
       <section class="msg-section" id="msgSection" style="display:none">
         <div class="msg-title">收到的文本消息</div>
         <div class="msg-list" id="msgList"></div>

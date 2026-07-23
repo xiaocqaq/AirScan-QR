@@ -6,15 +6,27 @@
         <entry key="0">
           <value>
             <TabSessionState>
-              <option name="provider" value="codex" />
-              <option name="sessionId" value="019f8c8c-e51a-7850-94df-0cbb02602216" />
-              <option name="cwd" value="E:\workplace\AirScan-QR" />
-              <option name="model" value="gpt-5.6-sol" />
+              <option name="provider" value="claude" />
+              <option name="sessionId" value="c1a8e69a-ed68-48c5-af84-4e4760fdb9e1" />
+              <option name="cwd" value="D:\code\AirScan-QR-master" />
+              <option name="model" value="claude-sonnet-4-6[1m]" />
+              <option name="permissionMode" value="bypassPermissions" />
+            </TabSessionState>
+          </value>
+        </entry>
+        <entry key="1">
+          <value>
+            <TabSessionState>
+              <option name="provider" value="claude" />
+              <option name="sessionId" value="f43778ad-9022-487a-9069-c290af77075f" />
+              <option name="cwd" value="D:\code\AirScan-QR-master" />
+              <option name="model" value="claude-opus-4-8[1m]" />
               <option name="permissionMode" value="bypassPermissions" />
             </TabSessionState>
           </value>
         </entry>
       </map>
     </option>
+    <option name="tabCount" value="2" />
   </component>
 </project>
