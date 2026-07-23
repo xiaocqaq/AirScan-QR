@@ -5,18 +5,25 @@
   <script>
     document.getElementById('page').addEventListener('load', (event) => {
       const doc = event.target.contentDocument;
-      const names = ['.shell', '.masthead', '.stage-panel', '.scan-stage', '.control-panel', '.mode-chip'];
+      const names = ['.shell', '.masthead', '.message-panel', '.control-panel', '.notice', '.stage-panel', '.scan-stage', '.mode-chip'];
       const boxes = Object.fromEntries(names.map((name) => {
         const box = doc.querySelector(name).getBoundingClientRect();
         return [name, { left: box.left, right: box.right, width: box.width }];
       }));
+      const sequence = ['.message-panel', '.control-panel', '.notice', '.stage-panel']
+        .map((name) => [...doc.querySelectorAll('main *')].indexOf(doc.querySelector(name)));
+      const preview = doc.querySelector('.scan-stage').getBoundingClientRect();
       const result = {
         clientWidth: doc.documentElement.clientWidth,
         scrollWidth: doc.documentElement.scrollWidth,
         bodyWidth: doc.body.scrollWidth,
         boxes,
+        sequence,
+        previewHeight: preview.height,
       };
-      document.body.dataset.result = result.scrollWidth === result.clientWidth ? 'ok' : 'overflow';
+      const orderOk = sequence.every((value, index) => index === 0 || value > sequence[index - 1]);
+      const compact = preview.height <= 240;
+      document.body.dataset.result = result.scrollWidth === result.clientWidth && orderOk && compact ? 'ok' : 'overflow';
       document.getElementById('output').textContent = JSON.stringify(result);
     }, { once: true });
   </script>

@@ -12,36 +12,21 @@
       <div>
         <p class="eyebrow">AIRSCAN / WEB RECEIVER</p>
         <h1>接收屏幕二维码</h1>
-        <p class="lede">选择发送端窗口，浏览器会持续识别并在完成后下载文件。</p>
+        <p class="lede">选择发送端窗口后，浏览器在后台按原始分辨率持续解码，不依赖页面预览大小。</p>
       </div>
       <div class="protocol-mark" aria-label="AirScan QR 协议标识">AS<span>QR</span></div>
     </header>
 
-    <section class="stage-panel" aria-labelledby="stageTitle">
-      <div class="stage-heading">
+    <section class="message-panel" aria-labelledby="messageTitle">
+      <div class="message-heading">
         <div>
-          <p class="section-kicker">LIVE CAPTURE</p>
-          <h2 id="stageTitle">共享窗口画面</h2>
+          <p class="section-kicker">RECEIVED TEXT</p>
+          <h2 id="messageTitle">收到的文字</h2>
         </div>
-        <span class="mode-chip" id="modeLabel">1×1 · 单区扫描</span>
+        <span class="message-count" id="messageCount">0 条</span>
       </div>
-      <div class="scan-stage">
-        <video id="shareVideo" autoplay muted playsinline aria-label="共享窗口预览"></video>
-        <div class="stage-empty" id="stageEmpty">
-          <span class="empty-glyph" aria-hidden="true">+</span>
-          <strong>尚未选择共享窗口</strong>
-          <span>共享发送端窗口后，二维码会显示在这里</span>
-        </div>
-        <canvas id="scanCanvas" aria-hidden="true"></canvas>
-        <div class="scan-badge" id="scanBadge" hidden>等待识别</div>
-      </div>
-      <div class="stage-footer">
-        <div class="status-line" aria-live="polite">
-          <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-          <span id="status">就绪 · 点击“选择共享窗口”开始</span>
-        </div>
-        <span class="frame-rate" id="scanRate">0 FPS</span>
-      </div>
+      <p class="message-empty" id="messageEmpty">等待接收文字消息</p>
+      <div class="message-list" id="messageList" aria-live="polite"></div>
     </section>
 
     <section class="control-panel" aria-labelledby="controlTitle">
@@ -85,9 +70,37 @@
     </section>
 
     <section class="notice" id="notice" aria-live="polite">
-      <strong>首次使用</strong>
-      <span>点击“选择共享窗口”，在浏览器权限框中选择发送端窗口。页面不会访问其他窗口。</span>
+      <strong>说明</strong>
+      <span>扫码<strong>不依赖页面预览</strong>（预览已去掉）。浏览器<strong>也不能</strong>在后台把发送端窗口放大；捕获分辨率等于该窗口在桌面上的实际像素。发送端窗口越大、二维码越大，复杂码越容易识别。</span>
     </section>
+
+    <section class="status-panel" aria-labelledby="statusTitle">
+      <div class="status-heading">
+        <div>
+          <p class="section-kicker">SCAN ENGINE</p>
+          <h2 id="statusTitle">后台扫描</h2>
+        </div>
+        <span class="mode-chip" id="modeLabel">1×1 · 单区扫描</span>
+      </div>
+      <div class="status-body">
+        <div class="status-line" aria-live="polite">
+          <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+          <span id="status">就绪 · 点击“选择共享窗口”开始</span>
+        </div>
+        <div class="status-metrics">
+          <span class="frame-rate" id="captureRes">捕获 —</span>
+          <span class="scan-badge" id="scanBadge">未开始</span>
+          <span class="frame-rate" id="scanRate">0 FPS</span>
+        </div>
+      </div>
+      <p class="status-hint" id="stageEmpty">无预览。扫码读的是共享流原始像素（见「捕获 W×H」），不是页面上的小框。浏览器不能把别人的窗口在后台放大——请在桌面上把发送端窗口拉大。</p>
+    </section>
+
+    <!-- 隐藏采集源：必须存在才能播放 MediaStream 并按 videoWidth/Height 扫码 -->
+    <div class="capture-host" aria-hidden="true">
+      <video id="shareVideo" autoplay muted playsinline></video>
+      <canvas id="scanCanvas"></canvas>
+    </div>
   </main>
   <dialog id="missingDialog" aria-labelledby="missingTitle">
     <div class="dialog-heading">
@@ -110,6 +123,7 @@
   <script defer src="capture.js"></script>
   <script defer src="transfer-store.js"></script>
   <script defer src="receiver-core.js"></script>
+  <script defer src="messages.js"></script>
   <script defer src="app.js"></script>
 </body>
 </html>

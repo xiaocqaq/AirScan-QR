@@ -41,3 +41,22 @@ test('qr region is located inside a dark application window', () => {
   assert.ok(region.y + region.height >= 65);
   assert.ok(region.x >= 10 && region.y >= 20);
 });
+
+test('small crops request upscale factors', () => {
+  const scales = decoder.chooseScales(120, 120);
+  assert.ok(scales.some((scale) => scale > 1.5));
+});
+
+test('luminance stretch expands low-contrast grey panels', () => {
+  const width = 4;
+  const height = 1;
+  const data = new Uint8ClampedArray([
+    40, 40, 40, 255,
+    80, 80, 80, 255,
+    120, 120, 120, 255,
+    160, 160, 160, 255,
+  ]);
+  const enhanced = decoder.enhanceLuminance({ data, width, height });
+  assert.equal(enhanced.data[0], 0);
+  assert.equal(enhanced.data[12], 255);
+});

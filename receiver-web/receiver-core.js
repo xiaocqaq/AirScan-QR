@@ -52,6 +52,7 @@
 
     async _acceptMeta(meta) {
       const stored = await this.store.upsertTask(meta);
+      if (stored.done) return false;
       this.task = { ...meta, receivedCount: stored.receivedCount || 0, done: Boolean(stored.done) };
       this.received = new Set(await this.store.getReceivedIndices(meta.tid));
       this.task.receivedCount = this.received.size;
@@ -125,7 +126,8 @@
         this.received.clear();
         this.task.receivedCount = 0;
         this.onComplete({ ok: false, name: this.task.name, size: this.task.fileSize,
-          blob: null, error: 'SHA-1 校验失败，已保留任务并清空损坏分片' });
+          blob: null, flags: this.task.flags,
+          error: 'SHA-1 校验失败，已保留任务并清空损坏分片' });
         this._emitProgress();
         return false;
       }
@@ -133,7 +135,7 @@
       this.task.done = true;
       if (this.store.markDone) await this.store.markDone(this.task.tid);
       this.onComplete({ ok: true, name: this.task.name, size: this.task.fileSize,
-        blob: this.blob, error: '' });
+        blob: this.blob, flags: this.task.flags, error: '' });
       return true;
     }
 

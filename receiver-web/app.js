@@ -13,6 +13,7 @@
   };
   let captureController = null;
   let initialization = null;
+  let messageFeed = null;
 
   function setStatus(message, level) {
     byId('status').textContent = message;
@@ -63,11 +64,18 @@
     if (status === 'validating') setStatus('帧已收齐 · 正在校验 SHA-1', 'live');
   }
 
-  function onComplete(result) {
+  async function onComplete(result) {
     if (!result.ok) {
       state.completed = null;
       byId('downloadButton').disabled = true;
       setStatus(`${result.error} · 请继续扫描`, 'error');
+      return;
+    }
+    if (result.flags & global.AirScan.protocol.FLAG_TEXT) {
+      clearCompletedDownload();
+      const text = await result.blob.text();
+      await messageFeed.addText(text, new Date(), { copyOnReceive: true });
+      setStatus(`收到文字 · ${result.size} 字节`, 'live');
       return;
     }
     state.completed = result;
@@ -94,20 +102,36 @@
     }
   }
 
+  function updateCaptureRes(video) {
+    const node = byId('captureRes');
+    if (!node) return;
+    const width = video.videoWidth || 0;
+    const height = video.videoHeight || 0;
+    node.textContent = width && height ? ('捕获 ' + width + '×' + height) : '捕获 —';
+  }
+
   function drawVideoFrame(video) {
     const canvas = byId('scanCanvas');
-    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+    // 关键：用 MediaStream 原始宽高，与页面 CSS / 预览尺寸无关
+    const width = video.videoWidth || 0;
+    const height = video.videoHeight || 0;
+    if (!width || !height) return canvas;
+    updateCaptureRes(video);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
     }
-    canvas.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0);
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    // 关闭平滑，保留 QR 模块锐利边缘
+    context.imageSmoothingEnabled = false;
+    context.drawImage(video, 0, 0, width, height);
     return canvas;
   }
 
   function updateScanRate() {
     const elapsed = (performance.now() - state.rateStartedAt) / 1000;
     if (elapsed < 1) return;
-    byId('scanRate').textContent = `${(state.decodedFrames / elapsed).toFixed(1)} FPS`;
+    byId('scanRate').textContent = (state.decodedFrames / elapsed).toFixed(1) + ' FPS';
   }
 
   async function processFrame(video) {
@@ -130,6 +154,9 @@
     byId('shareButton').disabled = false;
     byId('shareButton').textContent = '重新选择共享窗口';
     byId('pauseButton').disabled = true;
+    const stageEmpty = byId('stageEmpty');
+    if (stageEmpty) stageEmpty.hidden = false;
+    byId('scanBadge').textContent = '共享已结束';
     setStatus('共享已结束 · 已接收任务仍保留', 'error');
   }
 
@@ -153,12 +180,19 @@
       state.paused = false;
       state.decodedFrames = 0;
       state.rateStartedAt = performance.now();
-      byId('stageEmpty').hidden = true;
-      byId('scanBadge').hidden = false;
+      const stageEmpty = byId('stageEmpty');
+      if (stageEmpty) {
+        stageEmpty.textContent = '后台扫描中：解码使用共享流原始分辨率（见「捕获 W×H」），与页面布局无关。';
+      }
       byId('pauseButton').disabled = false;
       shareButton.disabled = false;
       shareButton.textContent = '更换共享窗口';
-      setStatus('扫描中 · 等待二维码', 'live');
+      const video = byId('shareVideo');
+      updateCaptureRes(video);
+      const res = (video.videoWidth && video.videoHeight)
+        ? (video.videoWidth + '×' + video.videoHeight)
+        : '原始分辨率';
+      setStatus('后台扫描中 · 捕获 ' + res + '（非页面预览）', 'live');
     } catch (error) {
       shareButton.disabled = false;
       setStatus(`无法开始共享 · ${error.message || error}`, 'error');
@@ -206,27 +240,29 @@
 
   async function copyMissing() {
     const text = byId('missingRanges').textContent;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (_) {
-      const input = document.createElement('textarea');
-      input.value = text;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand('copy');
-      input.remove();
-    }
-    setStatus('缺失序号已复制', 'live');
+    const copied = await global.AirScan.messages.copyText(text);
+    setStatus(copied ? '缺失序号已复制' : '复制失败 · 请手动选择序号', copied ? 'live' : 'error');
+  }
+
+  function addTextMessage(text, receivedAt) {
+    return messageFeed.addText(text, receivedAt);
   }
 
   function init() {
+    messageFeed = global.AirScan.messages.createMessageFeed({
+      list: byId('messageList'),
+      empty: byId('messageEmpty'),
+      count: byId('messageCount'),
+      onCopy: (copied) => setStatus(
+        copied ? '文字已复制' : '复制失败 · 请手动选择文字', copied ? 'live' : 'error'),
+    });
     initialization = initializeReceiver();
     initialization.catch(() => {});
     captureController = global.AirScan.capture.createCapture(byId('shareVideo'), {
       onFrame: processFrame,
       onEnded: onCaptureEnded,
       onError: onCaptureError,
-      intervalMs: 80,
+      intervalMs: 50,
     });
     byId('shareButton').addEventListener('click', startSharing);
     byId('pauseButton').addEventListener('click', () => {
@@ -241,7 +277,9 @@
     updateMode();
   }
 
-  const api = { startSharing, pauseScanning, resumeScanning, showMissing, downloadCurrent };
+  const api = {
+    startSharing, pauseScanning, resumeScanning, showMissing, downloadCurrent, addTextMessage,
+  };
   global.airscanReceiver = api;
   global.addEventListener('DOMContentLoaded', init, { once: true });
 }(window));

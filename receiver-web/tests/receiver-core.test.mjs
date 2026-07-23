@@ -64,26 +64,31 @@ class MemoryStore {
     this.received.set(key, new Set());
     this.tasks.get(key).receivedCount = 0;
   }
+
+  async markDone(tid) {
+    this.tasks.get(tidKey(tid)).done = true;
+  }
 }
 
 async function sha1(bytes) {
   return new Uint8Array(await crypto.subtle.digest('SHA-1', bytes));
 }
 
-async function fixture({ corruptHash = false } = {}) {
+async function fixture({ corruptHash = false, flags = 0, text = 'hello' } = {}) {
   const tid = new Uint8Array([84, 69, 83, 84]);
-  const data = encoder.encode('hello');
+  const data = encoder.encode(text);
+  const split = Math.ceil(data.length / 2);
   const digest = await sha1(data);
   if (corruptHash) digest[0] ^= 0xff;
   const meta = buildMetaForTest({
-    tid, flags: 0, total: 2, chunkSize: 3, fileSize: data.length,
+    tid, flags, total: 2, chunkSize: split, fileSize: data.length,
     name: 'hello.txt', sha1: digest,
   });
   return {
     tid,
     meta: await scramble(meta),
-    first: await scramble(buildDataForTest(tid, 0, data.slice(0, 3))),
-    second: await scramble(buildDataForTest(tid, 1, data.slice(3))),
+    first: await scramble(buildDataForTest(tid, 0, data.slice(0, split))),
+    second: await scramble(buildDataForTest(tid, 1, data.slice(split))),
   };
 }
 
@@ -129,6 +134,39 @@ test('complete transfer validates and creates the original blob', async () => {
   assert.equal(completed.name, 'hello.txt');
   assert.equal(await completed.blob.text(), 'hello');
   assert.deepEqual(core.progress(), { received: 2, total: 2, missingCount: 0 });
+});
+
+test('complete text transfer reports its protocol flag', async () => {
+  const frames = await fixture({ flags: protocol.FLAG_TEXT, text: '收到的文字' });
+  let completed = null;
+  const core = new ReceiverCore({
+    store: new MemoryStore(),
+    onComplete: (result) => { completed = result; },
+  });
+
+  await core.acceptFrame(frames.meta);
+  await core.acceptFrame(frames.first);
+  await core.acceptFrame(frames.second);
+
+  assert.equal(completed.flags, protocol.FLAG_TEXT);
+  assert.equal(await completed.blob.text(), '收到的文字');
+});
+
+test('repeated metadata for a completed task is ignored', async () => {
+  const frames = await fixture();
+  let metaEvents = 0;
+  const core = new ReceiverCore({
+    store: new MemoryStore(),
+    onMeta: () => { metaEvents += 1; },
+  });
+
+  await core.acceptFrame(frames.meta);
+  await core.acceptFrame(frames.first);
+  await core.acceptFrame(frames.second);
+  const accepted = await core.acceptFrame(frames.meta);
+
+  assert.equal(accepted, false);
+  assert.equal(metaEvents, 1);
 });
 
 test('sha1 failure clears chunks but retains task metadata for retry', async () => {
