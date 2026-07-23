@@ -1,6 +1,6 @@
 """AirScan-QR 桌面主窗口 (pywebview 架构).
 
-界面复用 ui.html (内联现代 CSS, 无 CDN 依赖, 可离线运行)。
+界面使用 ui.html / ui.css / ui.js (无 CDN 依赖, 可离线运行)。
 Python 侧只做逻辑: 发送广播循环 / 屏幕捕获解码 / 剪贴板 / 落盘,
 通过 js_api 接收前端调用, 通过 window.evaluate_js 把二维码/进度推给前端。
 
@@ -81,7 +81,7 @@ class Api:
         self._picked_file = None
         return {"ok": True}
 
-    def start_send(self, text, grid, err, fps):
+    def start_send(self, text, grid, err, fps, start_index=1):
         # 只做轻量校验后立即返回, 真正的构建 (读文件/切片) 放后台线程,
         # 避免大文件在主线程阻塞导致 UI "未响应"。
         if self._picked_file:
@@ -100,21 +100,27 @@ class Api:
         self.fps = max(1, int(fps))
         self._send_stop.clear()
         self._send_thread = threading.Thread(
-            target=self._build_and_send, args=(src, err, int(grid)), daemon=True)
+            target=self._build_and_send,
+            args=(src, err, int(grid), int(start_index)),
+            daemon=True,
+        )
         self._send_thread.start()
         return {"ok": True}
 
-    def _build_and_send(self, src, err, grid):
+    def _build_and_send(self, src, err, grid, start_index):
         try:
             if src[0] == "file":
                 data, name, is_text = load_file(src[1])
             else:
                 data, name, is_text = load_text(src[1])
-            self.sender = Sender(data, name, is_text, error=err, grid=grid)
+            self.sender = Sender(
+                data, name, is_text, error=err, grid=grid,
+                start_index=start_index,
+            )
         except Exception as e:
             _js(f"onSendError({_js_str(f'发送失败: {e}')})")
             return
-        _js("onSendReady()")
+        _js(f"onSendReady({self.sender.total}, {self.sender.start_index})")
         self._send_loop()
 
     def set_fps(self, fps):
@@ -158,6 +164,20 @@ class Api:
         self._recv_stop.set()
         if self.receiver and self.receiver.task and not self.receiver.task.done:
             self.receiver.task.cleanup()
+
+    def get_missing(self):
+        """返回当前接收任务的缺失帧摘要，序号按 1-based 展示。"""
+        task = self.receiver.task if self.receiver else None
+        if task:
+            return task.missing_summary()
+        return {
+            "name": "",
+            "received": 0,
+            "total": 0,
+            "missing_count": 0,
+            "ranges": "暂无接收任务",
+            "done": False,
+        }
 
     def _recv_loop(self):
         while not self._recv_stop.is_set():

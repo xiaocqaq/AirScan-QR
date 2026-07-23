@@ -17,6 +17,23 @@ from PIL import ImageGrab
 from . import protocol as P
 
 
+def format_missing_ranges(indices: list[int]) -> str:
+    """把 0-based 缺失索引压缩为 1-based 连续区间。"""
+    if not indices:
+        return "无缺失帧"
+    ranges = []
+    start = previous = indices[0] + 1
+    for index in indices[1:]:
+        current = index + 1
+        if current == previous + 1:
+            previous = current
+            continue
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = previous = current
+    ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ", ".join(ranges)
+
+
 class Task:
     """单次接收任务的状态 + 落盘。"""
 
@@ -57,17 +74,36 @@ class Task:
     def missing(self) -> list:
         return [i for i in range(self.total) if not self.received[i]]
 
+    def missing_summary(self) -> dict:
+        missing = self.missing()
+        return {
+            "name": self.name,
+            "received": self.got_count,
+            "total": self.total,
+            "missing_count": len(missing),
+            "ranges": format_missing_ranges(missing),
+            "done": self.done,
+        }
+
     def finalize(self):
         """flush 并校验 sha1; 返回 (ok, data_or_None)。文本模式一并读回内容。"""
         self._fh.flush()
-        self._fh.close()
-        self.done = True
         with open(self.path, "rb") as f:
             data = f.read(self.file_size)
         ok = P.sha1_bytes(data) == self.sha1
+        if ok:
+            self._fh.close()
+            self.done = True
         if self.is_text:
             return ok, data
         return ok, None  # 文件模式内容留在 self.path, 供 GUI 另存
+
+    def reset_for_retry(self):
+        """校验失败后清空接收位图，允许同一任务完整重传。"""
+        self.received = bytearray(self.total)
+        self.got_count = 0
+        self.done = False
+        self._fh.seek(0)
 
     def cleanup(self):
         try:
@@ -135,7 +171,10 @@ class Receiver:
                 self.on_progress(t.got_count, t.total)
             if t.is_complete():
                 ok, text = t.finalize()
-                self._last_done_tid = t.tid
+                if ok:
+                    self._last_done_tid = t.tid
+                else:
+                    t.reset_for_retry()
                 if self.on_complete:
                     self.on_complete(ok, t, text)
             return 1

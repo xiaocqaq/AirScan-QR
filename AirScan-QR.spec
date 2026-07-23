@@ -1,9 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+
 from PyInstaller.utils.hooks import collect_dynamic_libs
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('airscan/ui.html', '.')]
-binaries = []
+datas = [('airscan/ui.html', '.'), ('airscan/ui.css', '.'), ('airscan/ui.js', '.'), ('airscan/icon.ico', '.')]
+vcr120 = os.environ.get(
+    'VCR120_DLL',
+    os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', 'msvcr120.dll'),
+)
+if not os.path.isfile(vcr120):
+    raise FileNotFoundError(
+        'MSVCR120.dll is required by pyzbar. Set VCR120_DLL to its x64 path.'
+    )
+
+binaries = [(vcr120, '.')]
 hiddenimports = ['win32gui', 'win32ui', 'win32con']
 binaries += collect_dynamic_libs('pyzbar')
 tmp_ret = collect_all('webview')

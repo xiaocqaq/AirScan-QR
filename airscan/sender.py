@@ -23,7 +23,7 @@ def _gen_tid() -> bytes:
 class Sender:
     def __init__(self, data: bytes, name: str, is_text: bool,
                  error: str = "m", chunk_size: int = None,
-                 grid: int = 2, scale: int = 6):
+                 grid: int = 2, scale: int = 6, start_index: int = 1):
         self.data = data
         self.name = name
         self.is_text = is_text
@@ -37,6 +37,7 @@ class Sender:
 
         self.chunks = P.slice_data(data, self.chunk_size)
         self.total = len(self.chunks)
+        self.start_index = max(1, min(int(start_index), self.total))
         flags = P.FLAG_TEXT if is_text else 0
         self.meta = P.build_meta(self.tid, flags, self.total, self.chunk_size,
                                  len(data), name, P.sha1_bytes(data))
@@ -47,7 +48,7 @@ class Sender:
         self._meta_img = None
         self._data_cache = {}    # index -> 已渲染的 QR 图
 
-        self._pos = 0            # 当前在 data 帧序列中的位置
+        self._pos = self.start_index - 1  # 当前在 data 帧序列中的位置
         self._since_meta = self.total  # 初始设满 -> 第一格先发 meta
         self.sent_frames = 0
         # 每发约一屏的 data 帧后注入一次 meta, 保证接收端随时加入都能拿到元信息。

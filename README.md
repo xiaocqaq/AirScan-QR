@@ -47,7 +47,7 @@ python main.py
 * **窗口捕获 (PrintWindow)**：用 `PW_RENDERFULLCONTENT` 抓取指定窗口内容，即使被遮挡也能持续接收。
 * **边收边落盘**：接收端按 fileSize 预分配临时文件，数据帧按偏移 `seek+write`，用位图记录进度，大文件不吃内存。
 * **SHA-1 校验**：完成后比对整文件哈希，不匹配则继续等待重传。
-* **现代化界面**：pywebview + 内联 CSS（无 CDN 依赖），圆角卡片、蓝色主题按钮、胶囊标签页，离线可用。
+* **现代化界面**：pywebview + 本地 HTML/CSS/JS（无 CDN 依赖），响应式控制区优先为二维码保留空间，离线可用。
 
 ## 🛠️ 传输协议
 
@@ -66,7 +66,7 @@ build.bat
 
 产物 `dist\AirScan-QR.exe`，双击即用，无需 Python 环境。打包包含：
 - `--icon` 嵌入 QR 主题蓝色图标
-- `--add-data` 打入 ui.html 界面
+- `--add-data` 打入 ui.html / ui.css / ui.js 界面资源
 - `--collect-binaries pyzbar` 打包 ZBar 原生 DLL
 - `--collect-all webview` 打包 pywebview JS bridge
 - `--hidden-import` 打包 pywin32 窗口捕获模块
@@ -84,7 +84,9 @@ airscan/
   receiver.py        # 解码、落盘重组、连传
   wincap.py          # 窗口捕获 (PrintWindow, 支持后台抓窗)
   app.py             # pywebview 主窗口 + js_api 桥
-  ui.html            # 现代化界面 (内联 CSS, 无 CDN)
+  ui.html            # 界面结构 (无 CDN)
+  ui.css             # 响应式样式
+  ui.js              # pywebview 前端交互
   icon.ico           # 应用图标
 requirements.txt
 build.bat
