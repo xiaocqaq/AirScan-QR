@@ -14,6 +14,12 @@
   let captureController = null;
   let initialization = null;
   let messageFeed = null;
+  const payloadQueue = [];
+  let payloadPumping = false;
+  let pendingProgress = null;
+  let progressTimer = 0;
+  let lastProgressPaint = 0;
+  const PROGRESS_MIN_INTERVAL_MS = 120;
 
   function setStatus(message, level) {
     byId('status').textContent = message;
@@ -34,11 +40,28 @@
     setStatus(paused ? '已暂停 · 任务仍保留' : '扫描中 · 等待二维码', paused ? 'idle' : 'live');
   }
 
-  function updateProgress(progress) {
-    byId('progress').textContent = `${progress.received} / ${progress.total}`;
-    byId('missingCount').textContent = `缺失 ${progress.missingCount} 帧`;
+  function paintProgress(progress) {
+    byId('progress').textContent = progress.received + ' / ' + progress.total;
+    byId('missingCount').textContent = '缺失 ' + progress.missingCount + ' 帧';
     const percent = progress.total ? progress.received / progress.total * 100 : 0;
-    byId('progressFill').style.width = `${percent}%`;
+    byId('progressFill').style.width = percent + '%';
+    lastProgressPaint = performance.now();
+  }
+
+  function updateProgress(progress) {
+    pendingProgress = progress;
+    const now = performance.now();
+    // 文件传输时每帧刷 DOM 会卡 UI，节流到约 8 次/秒
+    if (now - lastProgressPaint < PROGRESS_MIN_INTERVAL_MS) {
+      if (!progressTimer) {
+        progressTimer = global.setTimeout(() => {
+          progressTimer = 0;
+          if (pendingProgress) paintProgress(pendingProgress);
+        }, PROGRESS_MIN_INTERVAL_MS);
+      }
+      return;
+    }
+    paintProgress(progress);
   }
 
   function sameTask(left, right) {
@@ -137,11 +160,39 @@
   async function processFrame(video) {
     const canvas = drawVideoFrame(video);
     const grid = Number(byId('gridSelect').value);
+    // 仅在此 await 解码；落盘走队列，避免 IndexedDB 阻塞下一帧扫描
     const payloads = await global.AirScan.decoder.decodeFrame(canvas, grid);
     state.decodedFrames += 1;
     updateScanRate();
-    byId('scanBadge').textContent = payloads.length ? `识别 ${payloads.length} 个二维码` : '等待识别';
-    for (const payload of payloads) await handlePayload(payload);
+    byId('scanBadge').textContent = payloads.length
+      ? ('识别 ' + payloads.length + ' 个二维码')
+      : '等待识别';
+    if (payloads.length) {
+      for (const payload of payloads) payloadQueue.push(payload);
+      // 传输忙时略降采集频率，把 CPU 让给写盘与 UI
+      if (payloadQueue.length > 8 && captureController) {
+        captureController.intervalMs = 90;
+      } else if (captureController) {
+        captureController.intervalMs = 50;
+      }
+      pumpPayloadQueue();
+    }
+  }
+
+  async function pumpPayloadQueue() {
+    if (payloadPumping) return;
+    payloadPumping = true;
+    try {
+      while (payloadQueue.length && state.active && !state.paused) {
+        const payload = payloadQueue.shift();
+        await handlePayload(payload);
+        // 让出主线程，避免进度条/点击无响应
+        await new Promise((resolve) => global.setTimeout(resolve, 0));
+      }
+    } finally {
+      payloadPumping = false;
+      if (payloadQueue.length && state.active && !state.paused) pumpPayloadQueue();
+    }
   }
 
   async function handlePayload(payload) {
@@ -151,12 +202,18 @@
   function onCaptureEnded() {
     state.active = false;
     state.paused = false;
+    payloadQueue.length = 0;
     byId('shareButton').disabled = false;
     byId('shareButton').textContent = '重新选择共享窗口';
     byId('pauseButton').disabled = true;
     const stageEmpty = byId('stageEmpty');
-    if (stageEmpty) stageEmpty.hidden = false;
+    if (stageEmpty) {
+      stageEmpty.hidden = false;
+      stageEmpty.textContent = '共享已结束。任务进度仍保留，可重新选择发送端窗口继续。';
+    }
     byId('scanBadge').textContent = '共享已结束';
+    const cap = byId('captureRes');
+    if (cap) cap.textContent = '捕获 —';
     setStatus('共享已结束 · 已接收任务仍保留', 'error');
   }
 
@@ -262,7 +319,7 @@
       onFrame: processFrame,
       onEnded: onCaptureEnded,
       onError: onCaptureError,
-      intervalMs: 50,
+      intervalMs: 60,
     });
     byId('shareButton').addEventListener('click', startSharing);
     byId('pauseButton').addEventListener('click', () => {

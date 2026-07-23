@@ -95,16 +95,18 @@
       const transaction = this.database.transaction(['tasks', 'chunks', 'received'], 'readwrite');
       const done = transactionDone(transaction);
       const chunks = transaction.objectStore('chunks');
-      if (await requestResult(chunks.get([key, index]))) return false;
+      // 跳过 exists get：调用方(ReceiverCore)已用内存 Set 去重
       const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
       const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      chunks.add({ tid: key, index, payload: data });
-      transaction.objectStore('received').add({ tid: key, index });
+      chunks.put({ tid: key, index, payload: data });
+      transaction.objectStore('received').put({ tid: key, index });
       const tasks = transaction.objectStore('tasks');
       const task = await requestResult(tasks.get(key));
-      task.receivedCount += 1;
-      task.lastUpdated = Date.now();
-      tasks.put(task);
+      if (task) {
+        task.receivedCount = (task.receivedCount || 0) + 1;
+        task.lastUpdated = Date.now();
+        tasks.put(task);
+      }
       await done;
       return true;
     }

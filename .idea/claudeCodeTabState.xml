@@ -7,9 +7,9 @@
           <value>
             <TabSessionState>
               <option name="provider" value="codex" />
-              <option name="sessionId" value="019f8c8c-e51a-7850-94df-0cbb02602216" />
+              <option name="sessionId" value="019f8e7c-5d08-7341-a9be-44101506b3bb" />
               <option name="cwd" value="E:\workplace\AirScan-QR" />
-              <option name="model" value="gpt-5.6-sol" />
+              <option name="model" value="grok-4.5" />
               <option name="permissionMode" value="bypassPermissions" />
             </TabSessionState>
           </value>

@@ -13,7 +13,7 @@
       this.onFrame = options.onFrame;
       this.onEnded = options.onEnded || (() => {});
       this.onError = options.onError || (() => {});
-      this.intervalMs = options.intervalMs || 50;
+      this.intervalMs = options.intervalMs || 60;
       this.stream = null;
       this.animationId = 0;
       this.active = false;

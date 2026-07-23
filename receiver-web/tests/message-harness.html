@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<body data-result="pending">
+  <iframe id="page" src="../receiver.html" style="width:390px;height:844px;border:0"></iframe>
+  <pre id="output">pending</pre>
+  <script>
+    document.getElementById('page').addEventListener('load', async (event) => {
+      const frame = event.target;
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+      let copied = '';
+      Object.defineProperty(win.navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (text) => { copied = text; } },
+      });
+
+      win.airscanReceiver.addTextMessage('第一条', new Date('2026-07-23T10:00:00'));
+      win.airscanReceiver.addTextMessage('第二条', new Date('2026-07-23T10:01:00'));
+      const texts = [...doc.querySelectorAll('.message-body')].map((node) => node.textContent);
+      doc.querySelector('.message-copy').click();
+      await Promise.resolve();
+      const result = {
+        texts,
+        count: doc.getElementById('messageCount').textContent,
+        emptyHidden: doc.getElementById('messageEmpty').hidden,
+        copied,
+      };
+      const ok = texts.join('|') === '第二条|第一条' && result.count === '2 条'
+        && result.emptyHidden && copied === '第二条';
+      document.body.dataset.result = ok ? 'ok' : 'failed';
+      document.getElementById('output').textContent = JSON.stringify(result);
+    }, { once: true });
+  </script>
+</body>
+</html>
