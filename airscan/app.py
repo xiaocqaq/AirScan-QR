@@ -1,12 +1,4 @@
-"""AirScan-QR 桌面主窗口 (pywebview 架构).
-
-界面使用 ui.html / ui.css / ui.js (无 CDN 依赖, 可离线运行)。
-Python 侧只做逻辑: 发送广播循环 / 屏幕捕获解码 / 剪贴板 / 落盘,
-通过 js_api 接收前端调用, 通过 window.evaluate_js 把二维码/进度推给前端。
-
-发送/接收循环均跑在后台线程, 避免阻塞 webview 主循环。
-专注 PC -> PC, 无摄像头。
-"""
+"""AirScan-QR 桌面主窗口，使用 pywebview 连接 UI 与后台传输线程。"""
 import base64
 import io
 import json
@@ -22,6 +14,7 @@ from . import protocol as P
 from . import wincap
 from .sender import Sender, load_file, load_text
 from .receiver import Receiver
+from .storage import default_download_dir, save_received_file, set_clipboard
 
 
 def _resource_path(name: str) -> str:
@@ -61,6 +54,7 @@ class Api:
         self._send_thread = None
         self.fps = 8
         self._picked_file = None
+        self._send_start_index = 1
         # 接收态 (仅窗口捕获)
         self.receiver = None
         self.hwnd = None          # 锁定的目标窗口句柄
@@ -95,9 +89,10 @@ class Api:
         self._send_stop.set()
         old = self._send_thread
         if old and old.is_alive() and old is not threading.current_thread():
-            old.join(timeout=1.0)
+            old.join()
         self.sender = None
         self.fps = max(1, int(fps))
+        self._send_start_index = max(1, int(start_index))
         self._send_stop.clear()
         self._send_thread = threading.Thread(
             target=self._build_and_send,
@@ -117,6 +112,7 @@ class Api:
                 data, name, is_text, error=err, grid=grid,
                 start_index=start_index,
             )
+            self._send_start_index = self.sender.start_index
         except Exception as e:
             _js(f"onSendError({_js_str(f'发送失败: {e}')})")
             return
@@ -126,9 +122,29 @@ class Api:
     def set_fps(self, fps):
         self.fps = max(1, int(fps))
 
-    def stop_send(self):
+    def pause_send(self):
         self._send_stop.set()
-        self.sender = None
+        old = self._send_thread
+        if old and old.is_alive() and old is not threading.current_thread():
+            old.join()
+        return {"ok": True}
+
+    def resume_send(self, start_index):
+        if not self.sender:
+            return {"error": "当前没有可继续的广播任务"}
+        requested = max(1, int(start_index))
+        if requested != self._send_start_index:
+            self._send_start_index = self.sender.seek(requested)
+        if self._send_thread and self._send_thread.is_alive():
+            return {"ok": True, "start_index": self._send_start_index}
+        self._send_stop.clear()
+        self._send_thread = threading.Thread(target=self._send_loop, daemon=True)
+        self._send_thread.start()
+        return {"ok": True, "start_index": self._send_start_index}
+
+    def stop_send(self):
+        """兼容旧前端：停止语义降级为暂停，不销毁 Sender。"""
+        return self.pause_send()
 
     def _send_loop(self):
         while not self._send_stop.is_set() and self.sender:
@@ -152,18 +168,35 @@ class Api:
     def start_recv(self):
         if not self.hwnd:
             return {"error": "请先选择窗口"}
-        self.receiver = Receiver(on_meta=self._on_meta,
-                                 on_progress=self._on_progress,
-                                 on_complete=self._on_complete)
+        resumed = self.receiver is not None
+        if self.receiver is None:
+            self.receiver = Receiver(on_meta=self._on_meta,
+                                     on_progress=self._on_progress,
+                                     on_complete=self._on_complete)
+        if self._recv_thread and self._recv_thread.is_alive():
+            return {"ok": True, "resumed": resumed}
         self._recv_stop.clear()
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
+        return {"ok": True, "resumed": resumed}
+
+    def pause_recv(self):
+        self._recv_stop.set()
+        old = self._recv_thread
+        if old and old.is_alive() and old is not threading.current_thread():
+            old.join()
+        return {"ok": True}
+
+    def reset_recv(self):
+        self.pause_recv()
+        if self.receiver and self.receiver.task:
+            self.receiver.task.cleanup()
+        self.receiver = None
         return {"ok": True}
 
     def stop_recv(self):
-        self._recv_stop.set()
-        if self.receiver and self.receiver.task and not self.receiver.task.done:
-            self.receiver.task.cleanup()
+        """兼容旧前端：停止语义降级为暂停，不清理接收任务。"""
+        return self.pause_recv()
 
     def get_missing(self):
         """返回当前接收任务的缺失帧摘要，序号按 1-based 展示。"""
@@ -178,6 +211,14 @@ class Api:
             "ranges": "暂无接收任务",
             "done": False,
         }
+
+    def get_download_dir(self):
+        return str(default_download_dir())
+
+    def open_download_dir(self):
+        directory = default_download_dir()
+        os.startfile(directory)
+        return {"ok": True, "path": str(directory)}
 
     def _recv_loop(self):
         while not self._recv_stop.is_set():
@@ -201,45 +242,31 @@ class Api:
         if task.is_text and text is not None:
             content = text.decode("utf-8", "replace")
             # 静默写系统剪贴板 (不弹提示), 并把消息追加到前端消息列表。
-            self._set_clipboard(content)
+            try:
+                set_clipboard(content)
+            except Exception:
+                pass
             self._messages.append(content)
             _js(f"addMessage({_js_str(content)})")
+            task.cleanup()
             _js("onComplete(true, true, '')")
         else:
-            save = _window.create_file_dialog(
-                webview.SAVE_DIALOG, save_filename=task.name)
-            info = ""
-            if save:
-                path = save if isinstance(save, str) else save[0]
-                try:
-                    with open(task.path, "rb") as src, open(path, "wb") as dst:
-                        dst.write(src.read(task.file_size))
-                    info = f"✅ 已保存: {path} · 等待下一次发送"
-                except Exception as e:
-                    info = f"保存失败: {e}"
-            task.cleanup()
-            _js(f"onComplete(true, false, {_js_str(info)})")
+            try:
+                path = save_received_file(task.path, task.file_size, task.name)
+                task.cleanup()
+                info = f"已保存: {path} · 等待下一次发送"
+                _js(f"onComplete(true, false, {_js_str(info)})")
+            except Exception as e:
+                info = f"保存失败: {e} · 临时文件已保留"
+                _js(f"onComplete(false, false, {_js_str(info)})")
 
     def copy_text(self, text):
         """逐条复制: 前端点消息旁的复制图标, 把该条文本重新写入剪贴板。"""
         try:
-            self._set_clipboard(text)
+            set_clipboard(text)
             return {"ok": True}
         except Exception:
             return {"ok": False}
-
-    def _set_clipboard(self, text):
-        """Python 侧兜底写系统剪贴板 (tkinter, 无额外依赖)。"""
-        try:
-            import tkinter as tk
-            r = tk.Tk()
-            r.withdraw()
-            r.clipboard_clear()
-            r.clipboard_append(text)
-            r.update()
-            r.destroy()
-        except Exception:
-            pass
 
 
 def main():

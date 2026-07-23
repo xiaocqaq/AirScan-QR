@@ -1,5 +1,6 @@
 const GRID_FPS_DEFAULTS = { 1: 8, 2: 5, 3: 3 };
 window._fpsTouched = false;
+window._sendPaused = false;
 
 function api(name, ...args) {
   return window.pywebview.api[name](...args);
@@ -19,7 +20,10 @@ function switchTab(tab) {
   document.getElementById('tab-recv').classList.toggle('active', !sending);
   document.getElementById('panel-send').classList.toggle('show', sending);
   document.getElementById('panel-recv').classList.toggle('show', !sending);
-  if (!sending) refreshWindows();
+  if (!sending) {
+    refreshWindows();
+    loadDownloadDir();
+  }
 }
 
 async function pickFile() {
@@ -66,8 +70,10 @@ async function startSend() {
   }
   document.getElementById('inputText').value = '';
   window._sending = true;
+  window._sendPaused = false;
   document.getElementById('btnSend').disabled = true;
-  document.getElementById('btnStopSend').disabled = false;
+  document.getElementById('btnSend').innerText = '开始广播';
+  document.getElementById('btnPauseSend').disabled = false;
   document.getElementById('sendStatus').innerText = '正在处理...';
   document.getElementById('qrStage').innerHTML = '<span class="placeholder">正在处理，请稍候...</span>';
 }
@@ -81,18 +87,44 @@ function onSendReady(total, startIndex) {
 function onSendError(message) {
   toast(message);
   window._sending = false;
+  window._sendPaused = false;
   document.getElementById('btnSend').disabled = false;
-  document.getElementById('btnStopSend').disabled = true;
+  document.getElementById('btnPauseSend').disabled = true;
   document.getElementById('sendStatus').innerText = '就绪';
   document.getElementById('qrStage').innerHTML = '<span class="placeholder">二维码将显示在这里</span>';
 }
 
-async function stopSend() {
-  await api('stop_send');
+async function startOrResumeSend() {
+  if (window._sendPaused) {
+    await resumeSend();
+    return;
+  }
+  await startSend();
+}
+
+async function pauseSend() {
+  await api('pause_send');
   window._sending = false;
+  window._sendPaused = true;
   document.getElementById('btnSend').disabled = false;
-  document.getElementById('btnStopSend').disabled = true;
-  document.getElementById('sendStatus').innerText = '已停止';
+  document.getElementById('btnSend').innerText = '继续广播';
+  document.getElementById('btnPauseSend').disabled = true;
+  document.getElementById('sendStatus').innerText = '已暂停 · 可修改起始序号后继续';
+}
+
+async function resumeSend() {
+  const startIndex = Math.max(1, +document.getElementById('startIndex').value || 1);
+  const result = await api('resume_send', startIndex);
+  if (result && result.error) {
+    toast(result.error);
+    return;
+  }
+  window._sending = true;
+  window._sendPaused = false;
+  document.getElementById('btnSend').disabled = true;
+  document.getElementById('btnSend').innerText = '开始广播';
+  document.getElementById('btnPauseSend').disabled = false;
+  document.getElementById('startIndex').value = result.start_index;
 }
 
 function pushQR(dataurl, status) {
@@ -115,15 +147,31 @@ async function startRecv() {
     return;
   }
   document.getElementById('btnRecv').disabled = true;
-  document.getElementById('btnStopRecv').disabled = false;
-  document.getElementById('recvStatus').innerText = '接收中...';
+  document.getElementById('btnRecv').innerText = '继续接收';
+  document.getElementById('btnPauseRecv').disabled = false;
+  document.getElementById('recvStatus').innerText = result.resumed ? '继续接收中...' : '接收中...';
 }
 
-async function stopRecv() {
-  await api('stop_recv');
+async function pauseRecv() {
+  await api('pause_recv');
   document.getElementById('btnRecv').disabled = false;
-  document.getElementById('btnStopRecv').disabled = true;
-  document.getElementById('recvStatus').innerText = '已停止';
+  document.getElementById('btnRecv').innerText = '继续接收';
+  document.getElementById('btnPauseRecv').disabled = true;
+  document.getElementById('recvStatus').innerText = '已暂停 · 当前进度已保留';
+}
+
+async function resetRecv() {
+  if (!window.confirm('确定清空当前接收进度吗？')) return;
+  await api('reset_recv');
+  document.getElementById('btnRecv').innerText = '开始接收';
+  document.getElementById('btnRecv').disabled = !document.getElementById('winSel').value;
+  document.getElementById('btnPauseRecv').disabled = true;
+  document.getElementById('btnResetRecv').disabled = true;
+  document.getElementById('btnMissing').disabled = true;
+  document.getElementById('recvFile').innerText = '';
+  document.getElementById('progBig').innerText = '-';
+  document.getElementById('pbar').style.width = '0%';
+  document.getElementById('recvStatus').innerText = '任务已重置';
 }
 
 function onMeta(name, total, isText) {
@@ -132,6 +180,7 @@ function onMeta(name, total, isText) {
   document.getElementById('progBig').classList.remove('ok');
   document.getElementById('pbar').style.width = '0%';
   document.getElementById('btnMissing').disabled = false;
+  document.getElementById('btnResetRecv').disabled = false;
 }
 
 function onProgress(got, total) {
@@ -143,7 +192,7 @@ function onProgress(got, total) {
 function onComplete(ok, isText, info) {
   const progress = document.getElementById('progBig');
   if (!ok) {
-    document.getElementById('recvStatus').innerText = '校验失败，等待重传...';
+    document.getElementById('recvStatus').innerText = info || '校验失败，等待重传...';
     return;
   }
   if (isText) {
@@ -194,6 +243,14 @@ async function onWinPick() {
   const hwnd = document.getElementById('winSel').value;
   document.getElementById('btnRecv').disabled = !hwnd;
   if (hwnd) await api('set_window', +hwnd);
+}
+
+async function loadDownloadDir() {
+  document.getElementById('downloadDir').innerText = await api('get_download_dir');
+}
+
+async function openDownloadDir() {
+  await api('open_download_dir');
 }
 
 function addMessage(text) {

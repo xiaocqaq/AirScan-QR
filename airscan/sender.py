@@ -68,6 +68,12 @@ class Sender:
             self._data_cache[idx] = img
         return img
 
+    def seek(self, frame_number: int) -> int:
+        """把下一帧定位到指定的 1-based 序号。"""
+        self.start_index = max(1, min(int(frame_number), self.total))
+        self._pos = self.start_index - 1
+        return self.start_index
+
     def _next_cell(self) -> Image.Image:
         """广播流: 每发满 _meta_gap 个 data 帧后注入一次 meta, 其余循环发 data。"""
         if self._since_meta >= self._meta_gap:

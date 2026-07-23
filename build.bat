@@ -7,7 +7,7 @@ if not defined VCR120_DLL set "VCR120_DLL=%SystemRoot%\System32\msvcr120.dll"
 if not exist "%VCR120_DLL%" goto :vcrerr
 
 echo [1/2] Installing build dependencies...
-python -m pip install segno pyzbar pillow numpy pywebview pywin32 pyinstaller
+python -m pip install segno pyzbar pillow pywebview pywin32 pyinstaller
 if errorlevel 1 goto :err
 
 echo [2/2] Building dist\AirScan-QR.exe...

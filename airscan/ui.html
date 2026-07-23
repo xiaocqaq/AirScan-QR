@@ -50,8 +50,8 @@
             inputmode="numeric" title="从指定帧开始顺序循环发送">
         </div>
         <div class="btn-grid">
-          <button class="btn btn-gray" id="btnStopSend" onclick="stopSend()" disabled>停止</button>
-          <button class="btn btn-primary" id="btnSend" onclick="startSend()">开始广播</button>
+          <button class="btn btn-gray" id="btnPauseSend" onclick="pauseSend()" disabled>暂停</button>
+          <button class="btn btn-primary" id="btnSend" onclick="startOrResumeSend()">开始广播</button>
         </div>
       </div>
       <div class="qr-stage" id="qrStage">
@@ -69,9 +69,15 @@
           <button class="btn btn-gray" onclick="refreshWindows()">刷新</button>
         </div>
         <div class="hint-line">锁定发送端窗口后，即使它被遮挡或在后台也能持续接收。发送端窗口不要最小化。</div>
-        <div class="row">
+        <div class="download-line">
+          <span>自动保存到</span>
+          <span class="download-path" id="downloadDir">Downloads</span>
+          <button class="btn btn-gray" onclick="openDownloadDir()">打开目录</button>
+        </div>
+        <div class="row recv-actions">
           <button class="btn btn-primary" id="btnRecv" onclick="startRecv()" disabled>开始接收</button>
-          <button class="btn btn-gray" id="btnStopRecv" onclick="stopRecv()" disabled>停止</button>
+          <button class="btn btn-gray" id="btnPauseRecv" onclick="pauseRecv()" disabled>暂停</button>
+          <button class="btn btn-gray" id="btnResetRecv" onclick="resetRecv()" disabled>重置任务</button>
           <button class="btn btn-gray" id="btnMissing" onclick="showMissing()" disabled>查看缺失序号</button>
         </div>
       </div>

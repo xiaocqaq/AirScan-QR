@@ -211,6 +211,10 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, butto
 .pbar-wrap { height: 10px; overflow: hidden; margin-bottom: 10px; border-radius: 999px; background: var(--line); }
 .pbar { width: 0; height: 100%; border-radius: 999px; background: var(--accent); transition: width .2s ease; }
 .hint-line { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.download-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.download-line .btn { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.download-path { flex: 1; min-width: 0; overflow: hidden; color: var(--ink2); font-family: "Consolas", monospace; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.recv-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .msg-section { margin-top: 4px; }
 .msg-title { margin: 8px 2px; color: var(--ink2); font-size: 13px; font-weight: 700; }
 .msg-list { display: flex; flex-direction: column; gap: 8px; }
@@ -235,6 +239,7 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, butto
 @media (max-width: 700px) {
   .topbar, .content { padding-inline: 16px; }
   .brand small { display: none; }
+  .recv-actions { grid-template-columns: 1fr 1fr; }
 }
 @media (max-height: 780px) {
   :root { --chrome-gap: 6px; --chrome-pad: 7px; --top-pad: 7px; --input-height: 42px; --control-height: 34px; }

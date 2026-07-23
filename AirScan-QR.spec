@@ -30,7 +30,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['numpy', 'tkinter', '_tkinter'],
     noarchive=False,
     optimize=0,
 )
