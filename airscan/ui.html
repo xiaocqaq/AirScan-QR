@@ -31,8 +31,8 @@
         <div class="row settings-row">
           <label class="lbl" for="gridSel">宫格</label>
           <select id="gridSel" onchange="onGridChange()">
-            <option value="1">1×1</option>
-            <option value="2" selected>2×2</option>
+            <option value="1" selected>1×1</option>
+            <option value="2">2×2</option>
             <option value="3">3×3</option>
           </select>
           <label class="lbl" for="errSel">纠错</label>
@@ -42,9 +42,9 @@
             <option value="q">Q 高</option>
           </select>
           <label class="lbl" for="fpsRange">FPS</label>
-          <input type="range" id="fpsRange" min="1" max="20" value="5"
+          <input type="range" id="fpsRange" min="1" max="20" value="8"
             oninput="onFpsInput(this)">
-          <span class="val" id="fpsVal">5</span>
+          <span class="val" id="fpsVal">8</span>
           <label class="lbl" for="startIndex">起始序号</label>
           <input class="number-input" type="number" id="startIndex" min="1" value="1"
             inputmode="numeric" title="从指定帧开始顺序循环发送">
@@ -53,6 +53,10 @@
           <button class="btn btn-gray" id="btnPauseSend" onclick="pauseSend()" disabled>暂停</button>
           <button class="btn btn-primary" id="btnSend" onclick="startOrResumeSend()">开始广播</button>
         </div>
+      </div>
+      <div class="focus-strip">
+        <button class="focus-toggle" id="btnQrFocus" onclick="toggleQrFocus()"
+          aria-label="隐藏控制区" aria-pressed="false" title="隐藏控制区">▲</button>
       </div>
       <div class="qr-stage" id="qrStage">
         <span class="placeholder">二维码将显示在这里</span>

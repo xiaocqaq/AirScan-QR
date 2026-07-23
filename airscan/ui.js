@@ -1,6 +1,7 @@
 const GRID_FPS_DEFAULTS = { 1: 8, 2: 5, 3: 3 };
 window._fpsTouched = false;
 window._sendPaused = false;
+window._qrFocus = false;
 
 function api(name, ...args) {
   return window.pywebview.api[name](...args);
@@ -21,10 +22,24 @@ function switchTab(tab) {
   document.getElementById('panel-send').classList.toggle('show', sending);
   document.getElementById('panel-recv').classList.toggle('show', !sending);
   if (!sending) {
+    setQrFocus(false);
     refreshWindows();
     loadDownloadDir();
   }
 }
+
+function setQrFocus(enabled) {
+  window._qrFocus = enabled;
+  document.body.classList.toggle('qr-focus', enabled);
+  const button = document.getElementById('btnQrFocus');
+  const label = enabled ? '显示控制区' : '隐藏控制区';
+  button.setAttribute('aria-pressed', String(enabled));
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.innerText = enabled ? '▼' : '▲';
+}
+
+function toggleQrFocus() { setQrFocus(!window._qrFocus); }
 
 async function pickFile() {
   const name = await api('pick_file');

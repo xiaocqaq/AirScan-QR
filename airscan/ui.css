@@ -183,6 +183,12 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, butto
 }
 .btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--chrome-gap); margin-top: var(--chrome-gap); }
+.focus-strip { display: flex; flex: 0 0 32px; align-items: center; justify-content: center; }
+.focus-toggle {
+  width: 44px; height: 32px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--field); color: var(--ink2); cursor: pointer; font: 700 18px/1 inherit;
+}
+.focus-toggle:hover { background: var(--line); color: var(--accent); }
 
 .qr-stage {
   display: flex;
@@ -202,6 +208,11 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, butto
 .qr-stage img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
 .qr-stage .placeholder { color: var(--muted); font-size: 14px; }
 .statusbar { flex: 0 0 auto; padding: 4px; color: var(--muted); font: 12px "Consolas", monospace; }
+
+.qr-focus .topbar, .qr-focus .send-card, .qr-focus #sendStatus { display: none; }
+.qr-focus .content { padding: 0; overflow: hidden; }
+.qr-focus .focus-strip { flex-basis: 32px; background: var(--bg); }
+.qr-focus .qr-stage { margin: 0; border-radius: 0; }
 
 .prog-line { display: flex; align-items: center; gap: 12px; margin: 12px 2px 6px; }
 .recv-file { max-width: 45%; overflow: hidden; color: var(--accent); font-size: 14px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
