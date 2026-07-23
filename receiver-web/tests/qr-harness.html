@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>AirScan QR Harness</title></head>
+<body data-result="pending">
+  <img id="fixture" src="fixtures/data-frame.png" alt="测试二维码">
+  <canvas id="canvas"></canvas>
+  <pre id="output">pending</pre>
+  <script src="../vendor/jsQR.js"></script>
+  <script src="../protocol.js"></script>
+  <script>
+    window.addEventListener('load', async () => {
+      const image = document.getElementById('fixture');
+      const canvas = document.getElementById('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+      const decoded = window.jsQR(pixels.data, pixels.width, pixels.height, {
+        inversionAttempts: 'attemptBoth',
+      });
+      if (!decoded || !decoded.binaryData) {
+        document.body.dataset.result = 'decode-failed';
+        return;
+      }
+      const raw = await window.AirScan.protocol.scramble(Uint8Array.from(decoded.binaryData));
+      const frame = window.AirScan.protocol.parseFrame(raw);
+      const ok = frame && frame.type === 1 && frame.index === 7
+        && Array.from(frame.payload).join(',') === '0,255,1,128,13';
+      document.body.dataset.result = ok ? 'ok' : 'protocol-failed';
+      document.getElementById('output').textContent = JSON.stringify({
+        result: document.body.dataset.result,
+        index: frame && frame.index,
+        payload: frame && Array.from(frame.payload),
+      });
+    }, { once: true });
+  </script>
+</body>
+</html>

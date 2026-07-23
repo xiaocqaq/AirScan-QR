@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AirScan-QR Web Receiver</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">AIRSCAN / WEB RECEIVER</p>
+        <h1>接收屏幕二维码</h1>
+        <p class="lede">选择发送端窗口，浏览器会持续识别并在完成后下载文件。</p>
+      </div>
+      <div class="protocol-mark" aria-label="AirScan QR 协议标识">AS<span>QR</span></div>
+    </header>
+
+    <section class="stage-panel" aria-labelledby="stageTitle">
+      <div class="stage-heading">
+        <div>
+          <p class="section-kicker">LIVE CAPTURE</p>
+          <h2 id="stageTitle">共享窗口画面</h2>
+        </div>
+        <span class="mode-chip" id="modeLabel">1×1 · 单区扫描</span>
+      </div>
+      <div class="scan-stage">
+        <video id="shareVideo" autoplay muted playsinline aria-label="共享窗口预览"></video>
+        <div class="stage-empty" id="stageEmpty">
+          <span class="empty-glyph" aria-hidden="true">+</span>
+          <strong>尚未选择共享窗口</strong>
+          <span>共享发送端窗口后，二维码会显示在这里</span>
+        </div>
+        <canvas id="scanCanvas" aria-hidden="true"></canvas>
+        <div class="scan-badge" id="scanBadge" hidden>等待识别</div>
+      </div>
+      <div class="stage-footer">
+        <div class="status-line" aria-live="polite">
+          <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+          <span id="status">就绪 · 点击“选择共享窗口”开始</span>
+        </div>
+        <span class="frame-rate" id="scanRate">0 FPS</span>
+      </div>
+    </section>
+
+    <section class="control-panel" aria-labelledby="controlTitle">
+      <div class="control-heading">
+        <div>
+          <p class="section-kicker">TRANSFER CONTROL</p>
+          <h2 id="controlTitle">接收设置</h2>
+        </div>
+        <span class="browser-note">Chrome / Edge 120+</span>
+      </div>
+      <div class="control-grid">
+        <label class="field">
+          <span>发送端宫格</span>
+          <select id="gridSelect">
+            <option value="1" selected>1×1 · 稳定优先</option>
+            <option value="2">2×2 · 并行扫描 4 区</option>
+            <option value="3">3×3 · 并行扫描 9 区</option>
+          </select>
+        </label>
+        <div class="field field-status">
+          <span>当前任务</span>
+          <strong id="taskName">暂无任务</strong>
+        </div>
+      </div>
+      <div class="action-row">
+        <button class="button button-primary" id="shareButton" type="button">选择共享窗口</button>
+        <button class="button button-secondary" id="pauseButton" type="button" disabled>暂停扫描</button>
+      </div>
+      <div class="progress-block" aria-live="polite">
+        <div class="progress-head">
+          <span>接收进度</span>
+          <strong id="progress">0 / 0</strong>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-meta"><span id="missingCount">缺失 0 帧</span><span id="storageLabel">浏览器本地存储</span></div>
+      </div>
+      <div class="secondary-actions">
+        <button class="text-button" id="missingButton" type="button" disabled>查看缺失序号</button>
+        <button class="text-button" id="downloadButton" type="button" disabled>重新下载文件</button>
+      </div>
+    </section>
+
+    <section class="notice" id="notice" aria-live="polite">
+      <strong>首次使用</strong>
+      <span>点击“选择共享窗口”，在浏览器权限框中选择发送端窗口。页面不会访问其他窗口。</span>
+    </section>
+  </main>
+  <dialog id="missingDialog" aria-labelledby="missingTitle">
+    <div class="dialog-heading">
+      <div>
+        <p class="section-kicker">RECOVERY</p>
+        <h2 id="missingTitle">缺失序号</h2>
+      </div>
+      <button class="icon-button" id="closeDialog" type="button" aria-label="关闭缺失序号">×</button>
+    </div>
+    <p class="dialog-meta" id="missingMeta">暂无接收任务</p>
+    <pre class="missing-ranges" id="missingRanges">暂无缺失序号</pre>
+    <div class="dialog-actions">
+      <button class="button button-secondary" id="copyMissing" type="button">复制序号</button>
+      <button class="button button-primary" id="dialogDone" type="button">完成</button>
+    </div>
+  </dialog>
+  <script defer src="protocol.js"></script>
+  <script defer src="sha1.js"></script>
+  <script defer src="decoder.js"></script>
+  <script defer src="capture.js"></script>
+  <script defer src="transfer-store.js"></script>
+  <script defer src="receiver-core.js"></script>
+  <script defer src="app.js"></script>
+</body>
+</html>

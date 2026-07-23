@@ -1,0 +1,23 @@
+<!doctype html>
+<html><body data-result="pending">
+  <iframe id="page" src="../receiver.html" style="width:390px;height:844px;border:0"></iframe>
+  <pre id="output">pending</pre>
+  <script>
+    document.getElementById('page').addEventListener('load', (event) => {
+      const doc = event.target.contentDocument;
+      const names = ['.shell', '.masthead', '.stage-panel', '.scan-stage', '.control-panel', '.mode-chip'];
+      const boxes = Object.fromEntries(names.map((name) => {
+        const box = doc.querySelector(name).getBoundingClientRect();
+        return [name, { left: box.left, right: box.right, width: box.width }];
+      }));
+      const result = {
+        clientWidth: doc.documentElement.clientWidth,
+        scrollWidth: doc.documentElement.scrollWidth,
+        bodyWidth: doc.body.scrollWidth,
+        boxes,
+      };
+      document.body.dataset.result = result.scrollWidth === result.clientWidth ? 'ok' : 'overflow';
+      document.getElementById('output').textContent = JSON.stringify(result);
+    }, { once: true });
+  </script>
+</body></html>
