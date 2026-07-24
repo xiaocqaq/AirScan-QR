@@ -355,13 +355,16 @@ function addMessage(text) {
   prependHistoryItem(list, item);
 }
 /* --- 文件夹同步 --- */
-window._syncFolders = { cloudBroadcast: null, applied: null, applyTarget: null, source: null };
+window._syncFolders = { cloudTarget: null, applied: null, source: null };
 const SYNC_FOLDER_LABELS = {
-  cloudBroadcast: 'syncCloudFolder',
+  cloudTarget: 'syncCloudFolder',
   applied: 'syncAppliedFolder',
-  applyTarget: 'syncApplyTargetFolder',
   source: 'syncSourceFolder',
 };
+function refreshSyncApplyEnabled() {
+  document.getElementById('btnSyncApply').disabled =
+    !(window._syncFolders.applied && window._syncFolders.cloudTarget);
+}
 async function syncPickFolder(target) {
   const folder = await api('sync_pick_folder');
   if (!folder) return;
@@ -371,17 +374,46 @@ async function syncPickFolder(target) {
     label.innerText = folder;
     label.classList.add('set');
   }
-  if (target === 'cloudBroadcast') {
+  if (target === 'cloudTarget') {
+    // 云端目标文件夹同时驱动 ① 广播 和 ④ 应用。
     document.getElementById('btnSyncBroadcast').disabled = false;
+    refreshSyncApplyEnabled();
   } else if (target === 'source') {
     document.getElementById('btnSyncDiff').disabled = false;
-  } else if (target === 'applied' || target === 'applyTarget') {
-    document.getElementById('btnSyncApply').disabled =
-      !(window._syncFolders.applied && window._syncFolders.applyTarget);
+  } else if (target === 'applied') {
+    refreshSyncApplyEnabled();
   }
 }
+function setAppliedFolder(folder) {
+  window._syncFolders.applied = folder;
+  const label = document.getElementById('syncAppliedFolder');
+  if (label) {
+    label.innerText = folder;
+    label.classList.add('set');
+  }
+  refreshSyncApplyEnabled();
+}
+// 由 Python 侧 drop 处理器回调 (拿到真实磁盘路径后)。
+function onSyncFolderDropped(folder) {
+  const zone = document.getElementById('syncDropZone');
+  if (zone) zone.classList.remove('drag-over');
+  if (!folder) { toast('未能识别拖入的文件夹，请改用手动选择'); return; }
+  setAppliedFolder(folder);
+  document.getElementById('syncStatus').innerText = '已拖入输出文件夹 · 点“应用同步”';
+}
+// dragenter/dragover 必须阻止默认, 否则 WebView2 会把文件夹当导航打开; 兼带高亮。
+(function initSyncDropZone() {
+  const zone = document.getElementById('syncDropZone');
+  if (!zone) return;
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  zone.addEventListener('dragenter', (e) => { stop(e); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragover', (e) => { stop(e); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', (e) => { stop(e); zone.classList.remove('drag-over'); });
+  // drop 的真实路径由 pywebview 的 Python 处理器负责; 这里仅收尾高亮。
+  zone.addEventListener('drop', (e) => { stop(e); });
+})();
 async function syncBroadcast() {
-  const folder = window._syncFolders.cloudBroadcast;
+  const folder = window._syncFolders.cloudTarget;
   if (!folder) { toast('请先选择目标文件夹'); return; }
   const result = await api('sync_broadcast_manifest', folder);
   if (result && result.error) { toast(result.error); return; }
@@ -409,14 +441,14 @@ async function syncBuild() {
   const result = await api('sync_build_output');
   if (result && result.error) { toast(result.error); return; }
   document.getElementById('syncDiffResult').innerText =
-    `已生成：${result.out_root}（复制 ${result.copied} 个文件，删除 ${result.delete_count} 个）`;
+    `已生成并打开：${result.out_root}（复制 ${result.copied} 个文件，删除 ${result.delete_count} 个）`;
   document.getElementById('syncStatus').innerText =
-    '输出文件夹已生成并打开 · 整份粘贴到云端后执行第 ④ 步';
+    '输出文件夹已打开 · 在资源管理器里整份复制粘贴到云端后执行第 ④ 步';
 }
 async function syncApply() {
   const applied = window._syncFolders.applied;
-  const target = window._syncFolders.applyTarget;
-  if (!applied || !target) { toast('请选择粘贴进来的文件夹和目标文件夹'); return; }
+  const target = window._syncFolders.cloudTarget;
+  if (!applied || !target) { toast('请先选择上方目标文件夹和粘贴进来的文件夹'); return; }
   const result = await api('sync_apply', applied, target);
   if (result && result.error) { toast(result.error); return; }
   const status = document.getElementById('syncApplyStatus');

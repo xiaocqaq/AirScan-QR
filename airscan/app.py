@@ -9,6 +9,7 @@ import time
 from collections import OrderedDict
 
 import webview
+from webview.dom import DOMEventHandler
 from PIL import Image
 
 from . import protocol as P
@@ -79,6 +80,42 @@ def _overlay_js(code: str):
         return
     try:
         _overlay_window.evaluate_js(code)
+    except Exception:
+        pass
+
+
+def _on_sync_drop(event):
+    """云端第 ④ 步拖放区: 从拖入项取真实磁盘路径, 落成 applied 来源。
+
+    WebView2 后端下, pywebview 会把真实路径塞进 files[i]['pywebviewFullPath'];
+    标准浏览器 drop 只给文件名, 所以这一步必须走 pywebview 的 DOM drop 事件。
+    """
+    try:
+        files = (event or {}).get("dataTransfer", {}).get("files", []) or []
+    except Exception:
+        files = []
+    raw = None
+    for f in files:
+        raw = f.get("pywebviewFullPath") or raw
+        if raw:
+            break
+    folder = None
+    if raw and os.path.exists(raw):
+        folder = raw if os.path.isdir(raw) else os.path.dirname(raw)
+    if folder:
+        _js(f"onSyncFolderDropped({_js_str(folder)})")
+    else:
+        _js("onSyncFolderDropped(null)")
+
+
+def _register_sync_dnd():
+    """window loaded 后注册拖放区; get_element 失败时静默跳过 (面板结构变更兜底)。"""
+    if _window is None:
+        return
+    try:
+        el = _window.dom.get_element("#syncDropZone")
+        if el is not None:
+            el.events.drop += DOMEventHandler(_on_sync_drop, prevent_default=True)
     except Exception:
         pass
 
@@ -448,6 +485,12 @@ class Api:
             return None
         return res[0]
 
+    def sync_resolve_dropped(self, path):
+        """把拖入的路径规整成文件夹: 若拖入的是文件, 取其所在目录。"""
+        if not path or not os.path.exists(path):
+            return None
+        return path if os.path.isdir(path) else os.path.dirname(path)
+
     def sync_broadcast_manifest(self, folder):
         """云端: 扫描目标文件夹, 生成清单并走现有 QR 管线广播 (弱通道)。"""
         if not folder or not os.path.isdir(folder):
@@ -510,6 +553,7 @@ class Api:
             os.startfile(out_root)
         except Exception:
             pass
+        summary["out_root"] = out_root
         summary["ok"] = True
         return summary
 
@@ -604,6 +648,11 @@ def main():
                 windll.user32.SetProcessDPIAware()
             except Exception:
                 pass
+        # 绑定 AppUserModelID: 让任务栏用 exe 自带的 QR 图标, 而非默认 python 图标。
+        try:
+            windll.shell32.SetCurrentProcessExplicitAppUserModelID("AirScan-QR")
+        except Exception:
+            pass
 
     api = Api()
     window = webview.create_window(
@@ -612,11 +661,12 @@ def main():
         js_api=api,
         width=820,
         height=900,
-        min_size=(640, 720),
+        min_size=(380, 480),
     )
     global _window
     _window = window
     window.events.closing += _on_closing
+    window.events.loaded += _register_sync_dnd
     _start_tray()
     webview.start()
 
