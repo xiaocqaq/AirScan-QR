@@ -49,10 +49,12 @@ def _gen_tid() -> bytes:
 class Sender:
     def __init__(self, data: bytes, name: str, is_text: bool,
                  error: str = "m", chunk_size: int = None,
-                 grid: int = 2, scale: int = 6, start_index: int = 1):
+                 grid: int = 2, scale: int = 6, start_index: int = 1,
+                 is_sync: bool = False):
         self.data = data
         self.name = name
         self.is_text = is_text
+        self.is_sync = is_sync
         self.error = error
         self.grid = max(1, grid)
         self.scale = scale
@@ -64,7 +66,7 @@ class Sender:
         self.chunks = P.slice_data(data, self.chunk_size)
         self.total = len(self.chunks)
         self.start_index = max(1, min(int(start_index), self.total))
-        flags = P.FLAG_TEXT if is_text else 0
+        flags = (P.FLAG_TEXT if is_text else 0) | (P.FLAG_SYNC if is_sync else 0)
         self.meta = P.build_meta(self.tid, flags, self.total, self.chunk_size,
                                  len(data), name, P.sha1_bytes(data))
 

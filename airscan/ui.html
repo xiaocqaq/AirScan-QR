@@ -13,6 +13,7 @@
       <nav class="tabs" aria-label="工作模式">
         <button class="tab active" id="tab-send" onclick="switchTab('send')">发送</button>
         <button class="tab" id="tab-recv" onclick="switchTab('recv')">接收</button>
+        <button class="tab" id="tab-sync" onclick="switchTab('sync')">文件夹同步</button>
       </nav>
       <button class="theme-toggle" id="themeToggle" onclick="cycleTheme()"
         title="主题: 跟随系统" aria-label="切换主题">🌓</button>
@@ -105,6 +106,69 @@
         <div class="msg-title">收到的文本消息</div>
         <div class="msg-list" id="msgList"></div>
       </section>
+    </section>
+
+    <section class="panel" id="panel-sync">
+      <div class="card">
+        <div class="sync-flow-hint">
+          一个同步回合：<b>云端</b>广播清单（二维码）→ <b>宿主机</b>锁定云端窗口收清单、算差异、生成输出文件夹 →
+          把输出文件夹整份粘贴到云端 → <b>云端</b>点“应用同步”。
+        </div>
+      </div>
+
+      <div class="card sync-role-card">
+        <div class="sync-role-title">☁️ 云端（目标机 · 代码要同步成和宿主机一致）</div>
+        <div class="sync-step">
+          <div class="sync-step-label">① 广播清单</div>
+          <div class="row">
+            <button class="btn btn-gray" onclick="syncPickFolder('cloudBroadcast')">选择目标文件夹</button>
+            <span class="field-name" id="syncCloudFolder">未选择</span>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary" id="btnSyncBroadcast" onclick="syncBroadcast()" disabled>广播清单</button>
+            <span class="sync-inline-status" id="syncBroadcastStatus"></span>
+          </div>
+          <div class="hint-line">广播后清单会显示在悬浮二维码窗口，让宿主机锁定该窗口接收。</div>
+        </div>
+        <div class="sync-step">
+          <div class="sync-step-label">④ 应用同步</div>
+          <div class="row">
+            <button class="btn btn-gray" onclick="syncPickFolder('applied')">选择粘贴进来的文件夹</button>
+            <span class="field-name" id="syncAppliedFolder">未选择</span>
+          </div>
+          <div class="row">
+            <button class="btn btn-gray" onclick="syncPickFolder('applyTarget')">选择目标文件夹</button>
+            <span class="field-name" id="syncApplyTargetFolder">未选择</span>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary" id="btnSyncApply" onclick="syncApply()" disabled>应用同步</button>
+            <span class="sync-inline-status" id="syncApplyStatus"></span>
+          </div>
+          <div class="hint-line">多余文件会移入目标文件夹的 .airscan-sync-backup 备份，不会物理删除。</div>
+        </div>
+      </div>
+
+      <div class="card sync-role-card">
+        <div class="sync-role-title">🖥️ 宿主机（源 · 代码在这里改）</div>
+        <div class="sync-step">
+          <div class="sync-step-label">② 先在“接收”页锁定云端窗口收清单</div>
+          <div class="sync-inline-status" id="syncManifestStatus">尚未收到云端清单</div>
+        </div>
+        <div class="sync-step">
+          <div class="sync-step-label">③ 计算差异并生成输出文件夹</div>
+          <div class="row">
+            <button class="btn btn-gray" onclick="syncPickFolder('source')">选择本地源文件夹</button>
+            <span class="field-name" id="syncSourceFolder">未选择</span>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary" id="btnSyncDiff" onclick="syncDiff()" disabled>计算差异</button>
+            <button class="btn btn-gray" id="btnSyncBuild" onclick="syncBuild()" disabled>生成并打开输出文件夹</button>
+          </div>
+          <div class="sync-diff-result" id="syncDiffResult"></div>
+          <div class="hint-line">生成后把输出文件夹整份复制粘贴到云端，再让云端执行第 ④ 步。</div>
+        </div>
+      </div>
+      <div class="statusbar" id="syncStatus">就绪</div>
     </section>
   </main>
 

@@ -53,12 +53,13 @@ function initTheme() {
 initTheme();
 
 function switchTab(tab) {
-  const sending = tab === 'send';
-  document.getElementById('tab-send').classList.toggle('active', sending);
-  document.getElementById('tab-recv').classList.toggle('active', !sending);
-  document.getElementById('panel-send').classList.toggle('show', sending);
-  document.getElementById('panel-recv').classList.toggle('show', !sending);
-  if (!sending) {
+  const tabs = ['send', 'recv', 'sync'];
+  tabs.forEach(name => {
+    const active = name === tab;
+    document.getElementById('tab-' + name).classList.toggle('active', active);
+    document.getElementById('panel-' + name).classList.toggle('show', active);
+  });
+  if (tab === 'recv') {
     refreshWindows();
     loadDownloadDir();
   }
@@ -352,6 +353,93 @@ function addMessage(text) {
   item.append(body, button);
   const list = document.getElementById('msgList');
   prependHistoryItem(list, item);
+}
+/* --- 文件夹同步 --- */
+window._syncFolders = { cloudBroadcast: null, applied: null, applyTarget: null, source: null };
+const SYNC_FOLDER_LABELS = {
+  cloudBroadcast: 'syncCloudFolder',
+  applied: 'syncAppliedFolder',
+  applyTarget: 'syncApplyTargetFolder',
+  source: 'syncSourceFolder',
+};
+async function syncPickFolder(target) {
+  const folder = await api('sync_pick_folder');
+  if (!folder) return;
+  window._syncFolders[target] = folder;
+  const label = document.getElementById(SYNC_FOLDER_LABELS[target]);
+  if (label) {
+    label.innerText = folder;
+    label.classList.add('set');
+  }
+  if (target === 'cloudBroadcast') {
+    document.getElementById('btnSyncBroadcast').disabled = false;
+  } else if (target === 'source') {
+    document.getElementById('btnSyncDiff').disabled = false;
+  } else if (target === 'applied' || target === 'applyTarget') {
+    document.getElementById('btnSyncApply').disabled =
+      !(window._syncFolders.applied && window._syncFolders.applyTarget);
+  }
+}
+async function syncBroadcast() {
+  const folder = window._syncFolders.cloudBroadcast;
+  if (!folder) { toast('请先选择目标文件夹'); return; }
+  const result = await api('sync_broadcast_manifest', folder);
+  if (result && result.error) { toast(result.error); return; }
+  document.getElementById('syncBroadcastStatus').innerText =
+    `正在广播清单 · ${result.files} 个文件（${result.root}）`;
+  document.getElementById('syncStatus').innerText =
+    '清单广播中 · 让宿主机在“接收”页锁定本窗口收清单';
+}
+async function syncDiff() {
+  const folder = window._syncFolders.source;
+  if (!folder) { toast('请先选择本地源文件夹'); return; }
+  const result = await api('sync_compute_diff', folder);
+  if (result && result.error) { toast(result.error); return; }
+  const box = document.getElementById('syncDiffResult');
+  box.innerText =
+    `新增/修改 ${result.send_count} 个 · 待删除 ${result.delete_count} 个`;
+  box.classList.add('show');
+  document.getElementById('btnSyncBuild').disabled =
+    !(result.send_count || result.delete_count);
+  document.getElementById('syncStatus').innerText = result.send_count || result.delete_count
+    ? '已算出差异 · 点“生成并打开输出文件夹”'
+    : '两端已一致，无需同步';
+}
+async function syncBuild() {
+  const result = await api('sync_build_output');
+  if (result && result.error) { toast(result.error); return; }
+  document.getElementById('syncDiffResult').innerText =
+    `已生成：${result.out_root}（复制 ${result.copied} 个文件，删除 ${result.delete_count} 个）`;
+  document.getElementById('syncStatus').innerText =
+    '输出文件夹已生成并打开 · 整份粘贴到云端后执行第 ④ 步';
+}
+async function syncApply() {
+  const applied = window._syncFolders.applied;
+  const target = window._syncFolders.applyTarget;
+  if (!applied || !target) { toast('请选择粘贴进来的文件夹和目标文件夹'); return; }
+  const result = await api('sync_apply', applied, target);
+  if (result && result.error) { toast(result.error); return; }
+  const status = document.getElementById('syncApplyStatus');
+  if (result.ok_flag) {
+    status.innerText =
+      `同步完成，文件一致 · 应用 ${result.applied} 个 · 删除 ${result.deleted} 个 · 校正 ${result.corrected} 个时间戳`;
+    document.getElementById('syncStatus').innerText = '同步完成，两端文件一致';
+  } else {
+    const detail = (result.mismatches || []).slice(0, 5)
+      .map(m => `${m.path}(${m.reason})`).join('、');
+    status.innerText =
+      `已应用但仍有 ${result.mismatches.length} 处不一致：${detail}${result.mismatches.length > 5 ? ' …' : ''}`;
+    document.getElementById('syncStatus').innerText = '同步后仍有差异，请检查上方列表';
+  }
+}
+function onSyncManifest(rootName, count) {
+  document.getElementById('syncManifestStatus').innerText =
+    `已收到云端清单：${rootName} · ${count} 个文件`;
+  toast('已收到云端清单');
+}
+function onSyncError(message) {
+  toast(message);
+  document.getElementById('syncStatus').innerText = message;
 }
 document.getElementById('inputText').addEventListener('keydown', event => {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;

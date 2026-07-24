@@ -44,6 +44,7 @@ class Task:
         self.file_size = meta["file_size"]
         self.sha1 = meta["sha1"]
         self.is_text = bool(meta["flags"] & P.FLAG_TEXT)
+        self.is_sync = bool(meta["flags"] & P.FLAG_SYNC)
         self.chunk_size = meta["chunk_size"]  # 由 meta 明确给出, 不再反推
 
         self.received = bytearray(self.total)  # 位图: 1=已收
@@ -94,7 +95,8 @@ class Task:
         if ok:
             self._fh.close()
             self.done = True
-        if self.is_text:
+        if self.is_text or self.is_sync:
+            # 文本模式回传解码文本; 同步模式回传清单字节 (gzip), 均由 GUI 后续处理。
             return ok, data
         return ok, None  # 文件模式内容留在 self.path, 供 GUI 另存
 

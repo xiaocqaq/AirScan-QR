@@ -13,6 +13,7 @@ from PIL import Image
 
 from . import protocol as P
 from . import wincap
+from . import foldersync
 from .clipboard import ClipboardWatcher, normalize_clipboard_text, read_clipboard_text
 from .overlay import OVERLAY_HTML
 from .sender import Sender, load_file, load_text, parse_frame_selection
@@ -108,6 +109,8 @@ class Api:
         self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
         self._recv_thread = None
+        # 文件夹同步: 宿主机侧缓存收到的云端清单 (root_name, manifest)。
+        self._sync_cloud_manifest = None
 
     def pick_file(self):
         res = _window.create_file_dialog(webview.OPEN_DIALOG)
@@ -132,7 +135,7 @@ class Api:
             src = ("text", clipboard_text)
         return self._replace_send_source(src, err, fps, start_index)
 
-    def _replace_send_source(self, src, err, fps, start_index=1):
+    def _replace_send_source(self, src, err, fps, start_index=1, monitor_clipboard=True):
         with self._send_lock:
             self._send_stop.set()
             old = self._send_thread
@@ -140,7 +143,8 @@ class Api:
                 old.join()
             self.sender = None
             self._image_dataurls.clear()
-            self._clipboard_monitor_enabled = True
+            # 同步广播 (清单) 不监听剪贴板, 否则复制文本会顶掉正在广播的清单。
+            self._clipboard_monitor_enabled = monitor_clipboard
             self.fps = max(1, int(fps))
             self._send_error_level = err
             self._active_text = src[1] if src[0] == "text" else None
@@ -157,13 +161,17 @@ class Api:
 
     def _build_and_send(self, src, err, grid, start_index):
         try:
+            is_sync = False
             if src[0] == "file":
                 data, name, is_text = load_file(src[1])
+            elif src[0] == "sync":
+                # ("sync", gzip清单字节, root_name): 走 QR 弱通道广播清单。
+                data, name, is_text, is_sync = src[1], f"{src[2]}.manifest", False, True
             else:
                 data, name, is_text = load_text(src[1])
             self.sender = Sender(
                 data, name, is_text, error=err, grid=grid,
-                start_index=start_index,
+                start_index=start_index, is_sync=is_sync,
             )
             self._send_start_index = self.sender.start_index
         except Exception as e:
@@ -173,7 +181,9 @@ class Api:
             self.close_overlay()
             return
         _js(f"onSendReady({self.sender.total}, {self.sender.start_index})")
-        self._start_clipboard_watch()
+        # 同步清单广播不监听剪贴板 (避免复制文本顶掉清单)。
+        if not is_sync:
+            self._start_clipboard_watch()
         self._send_loop()
 
     def set_fps(self, fps):
@@ -398,6 +408,17 @@ class Api:
         if not ok:
             _js("onComplete(false, false, '')")
             return
+        if task.is_sync and text is not None:
+            # 同步模式: text 即 gzip 清单字节。宿主机缓存云端清单, 供后续算差异。
+            try:
+                root_name, manifest = foldersync.deserialize_manifest(text)
+                self._sync_cloud_manifest = (root_name, manifest)
+                task.cleanup()
+                _js(f"onSyncManifest({_js_str(root_name)}, {len(manifest)})")
+            except Exception as e:
+                task.cleanup()
+                _js(f"onSyncError({_js_str(f'清单解析失败: {e}')})")
+            return
         if task.is_text and text is not None:
             content = text.decode("utf-8", "replace")
             # 静默写系统剪贴板，并把消息交给前端的有界历史列表展示。
@@ -418,6 +439,94 @@ class Api:
             except Exception as e:
                 info = f"保存失败: {e} · 临时文件已保留"
                 _js(f"onComplete(false, false, {_js_str(info)})")
+
+    # --- 文件夹同步 ---
+    def sync_pick_folder(self):
+        """弹出文件夹选择框, 返回所选路径 (取消返回 None)。"""
+        res = _window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not res:
+            return None
+        return res[0]
+
+    def sync_broadcast_manifest(self, folder):
+        """云端: 扫描目标文件夹, 生成清单并走现有 QR 管线广播 (弱通道)。"""
+        if not folder or not os.path.isdir(folder):
+            return {"error": "请选择有效的文件夹"}
+        try:
+            manifest = foldersync.scan_folder(folder)
+            root_name = os.path.basename(os.path.normpath(folder))
+            blob = foldersync.serialize_manifest(manifest, root_name)
+        except Exception as e:
+            return {"error": f"扫描失败: {e}"}
+        # 清单字节作为一次同步广播 (is_sync=True), 复用发送线程与悬浮窗。
+        result = self._replace_send_source(
+            ("sync", blob, root_name), self._send_error_level, self.fps,
+            monitor_clipboard=False)
+        result["files"] = len(manifest)
+        result["root"] = root_name
+        return result
+
+    def sync_compute_diff(self, folder):
+        """宿主机: 用已收云端清单与本地源文件夹 diff, 返回摘要 (不生成文件)。"""
+        if self._sync_cloud_manifest is None:
+            return {"error": "尚未收到云端清单, 请先在接收页锁定云端窗口收清单"}
+        if not folder or not os.path.isdir(folder):
+            return {"error": "请选择有效的文件夹"}
+        try:
+            _, cloud_manifest = self._sync_cloud_manifest
+            source_manifest = foldersync.scan_folder(folder)
+            diff = foldersync.diff_manifests(source_manifest, cloud_manifest)
+        except Exception as e:
+            return {"error": f"计算差异失败: {e}"}
+        self._sync_source_folder = folder
+        self._sync_source_manifest = source_manifest
+        self._sync_diff = diff
+        return {
+            "ok": True,
+            "send": diff["send"],
+            "delete": diff["delete"],
+            "send_count": len(diff["send"]),
+            "delete_count": len(diff["delete"]),
+        }
+
+    def sync_build_output(self):
+        """宿主机: 把上一步的差异生成待粘贴的输出文件夹, 返回其路径。"""
+        diff = getattr(self, "_sync_diff", None)
+        if diff is None:
+            return {"error": "请先计算差异"}
+        if not diff["send"] and not diff["delete"]:
+            return {"error": "两端已一致, 无需同步"}
+        root_name = (self._sync_cloud_manifest[0]
+                     if self._sync_cloud_manifest else "")
+        out_root = os.path.join(default_download_dir(),
+                                f"airscan-sync-out-{time.strftime('%Y%m%d-%H%M%S')}")
+        try:
+            summary = foldersync.build_output_folder(
+                self._sync_source_folder, out_root, diff,
+                self._sync_source_manifest, root_name=root_name)
+        except Exception as e:
+            return {"error": f"生成输出文件夹失败: {e}"}
+        try:
+            os.startfile(out_root)
+        except Exception:
+            pass
+        summary["ok"] = True
+        return summary
+
+    def sync_apply(self, applied_folder, target_folder):
+        """云端: 把粘贴进来的输出文件夹应用到目标文件夹 (删除带备份 + mtime 校正 + 校验)。"""
+        if not applied_folder or not os.path.isdir(applied_folder):
+            return {"error": "请选择粘贴进来的同步文件夹"}
+        if not target_folder or not os.path.isdir(target_folder):
+            return {"error": "请选择要同步的目标文件夹"}
+        try:
+            report = foldersync.apply_sync(applied_folder, target_folder)
+        except FileNotFoundError:
+            return {"error": "所选文件夹缺少 .airscan-sync/plan.json, 不是有效的同步文件夹"}
+        except Exception as e:
+            return {"error": f"应用同步失败: {e}"}
+        report["ok_flag"] = report["ok"]
+        return report
 
     def copy_text(self, text):
         """逐条复制: 前端点消息旁的复制图标, 把该条文本重新写入剪贴板。"""

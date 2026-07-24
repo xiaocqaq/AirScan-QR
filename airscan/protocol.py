@@ -22,6 +22,7 @@ TYPE_META = 0
 TYPE_DATA = 1
 
 FLAG_TEXT = 0x01  # bit0: 文本模式(接收端写剪贴板, 不落盘)
+FLAG_SYNC = 0x02  # bit1: 文件夹同步清单(接收端交给同步流程, 不落盘/不写剪贴板)
 
 # Meta: magic(2) ver(1) type(1) tid(4) flags(1) total(4) chunkSize(4) fileSize(8) nameLen(2) [name] sha1(20)
 _META_HEAD = ">2sBB4sBIIQH"
