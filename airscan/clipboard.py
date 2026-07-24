@@ -1,6 +1,15 @@
 """发送端剪贴板文本监听。"""
+import os
 import threading
 import time
+
+
+REMOTE_CLIPBOARD_PROCESSES = frozenset({
+    "rdpclip.exe",
+    "vdagent.exe",
+    "vmtoolsd.exe",
+    "wfica32.exe",
+})
 
 
 def normalize_clipboard_text(value: str):
@@ -36,15 +45,65 @@ def read_clipboard_sequence():
         return None
 
 
+def read_clipboard_owner_process():
+    """读取当前剪贴板所有者进程路径；无所有者或查询失败时返回 None。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.GetClipboardOwner.restype = wintypes.HWND
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        owner = user32.GetClipboardOwner()
+        if not owner:
+            return None
+        process_id = wintypes.DWORD()
+        if not user32.GetWindowThreadProcessId(owner, ctypes.byref(process_id)):
+            return None
+        handle = kernel32.OpenProcess(0x1000, False, process_id.value)
+        if not handle:
+            return None
+        try:
+            path = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(path))
+            if not kernel32.QueryFullProcessImageNameW(
+                    handle, 0, path, ctypes.byref(size)):
+                return None
+            return path.value
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return None
+
+
+def is_remote_clipboard_owner(process_path, ignored_processes=None):
+    """判断剪贴板所有者是否为远程桌面剪贴板同步代理。"""
+    if not process_path:
+        return False
+    ignored = ignored_processes or REMOTE_CLIPBOARD_PROCESSES
+    return os.path.basename(process_path).casefold() in ignored
+
+
 class ClipboardWatcher:
     """轮询剪贴板，发现新文本后调用回调。"""
 
     def __init__(self, on_text, interval=0.2, reader=None,
-                 sequence_reader=None, clock=None, duplicate_window=0.5):
+                 sequence_reader=None, owner_reader=None, clock=None,
+                 duplicate_window=0.5, ignored_owner_names=None):
         self.on_text = on_text
         self.interval = max(0.05, float(interval))
         self.reader = reader or read_clipboard_text
         self.sequence_reader = sequence_reader or read_clipboard_sequence
+        uses_system_clipboard = reader is None and sequence_reader is None
+        self.owner_reader = owner_reader or (
+            read_clipboard_owner_process if uses_system_clipboard else lambda: None
+        )
+        self.ignored_owner_names = frozenset(
+            name.casefold() for name in (
+                ignored_owner_names or REMOTE_CLIPBOARD_PROCESSES
+            )
+        )
         self.clock = clock or time.monotonic
         self.duplicate_window = max(0.0, float(duplicate_window))
         self._stop = threading.Event()
@@ -88,6 +147,9 @@ class ClipboardWatcher:
             return
         self._last_text = text
         self._last_sequence = sequence
+        if is_remote_clipboard_owner(
+                self.owner_reader(), self.ignored_owner_names):
+            return
         if text == self._ignored_text:
             self._ignored_text = None
             return

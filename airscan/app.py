@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import time
+from collections import OrderedDict
 
 import webview
 from PIL import Image
@@ -29,6 +30,31 @@ def _img_to_dataurl(img: Image.Image) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+class ImageDataUrlCache:
+    """按图像对象身份缓存 PNG data URL，并限制缓存数量。"""
+
+    def __init__(self, maxsize=32, encoder=None):
+        self.maxsize = max(1, int(maxsize))
+        self.encoder = encoder or _img_to_dataurl
+        self._items = OrderedDict()
+
+    def get(self, image):
+        key = id(image)
+        cached = self._items.get(key)
+        if cached is not None and cached[0] is image:
+            self._items.move_to_end(key)
+            return cached[1]
+        dataurl = self.encoder(image)
+        self._items[key] = (image, dataurl)
+        self._items.move_to_end(key)
+        while len(self._items) > self.maxsize:
+            self._items.popitem(last=False)
+        return dataurl
+
+    def clear(self):
+        self._items.clear()
 
 
 def _js_str(s: str) -> str:
@@ -56,6 +82,14 @@ def _overlay_js(code: str):
         pass
 
 
+def publish_send_frame(dataurl, status):
+    """主窗口仅更新状态，二维码只推送到悬浮窗。"""
+    _js(f"updateSendStatus({_js_str(status)})")
+    _overlay_js(
+        f"pushOverlayQR({_js_str(dataurl)}, {_js_str(status)})"
+    )
+
+
 class Api:
     def __init__(self):
         self.sender = None
@@ -66,6 +100,7 @@ class Api:
         self._clipboard_monitor_enabled = False
         self._send_error_level = "m"
         self._active_text = None
+        self._image_dataurls = ImageDataUrlCache()
         self.fps = 8
         self._picked_file = None
         self._send_start_index = 1
@@ -73,7 +108,6 @@ class Api:
         self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
         self._recv_thread = None
-        self._messages = []       # 已接收的文本消息 (供逐条复制)
 
     def pick_file(self):
         res = _window.create_file_dialog(webview.OPEN_DIALOG)
@@ -105,6 +139,7 @@ class Api:
             if old and old.is_alive() and old is not threading.current_thread():
                 old.join()
             self.sender = None
+            self._image_dataurls.clear()
             self._clipboard_monitor_enabled = True
             self.fps = max(1, int(fps))
             self._send_error_level = err
@@ -200,10 +235,9 @@ class Api:
         while not self._send_stop.is_set() and self.sender:
             s = self.sender
             img = s.next_image()
-            dataurl = _img_to_dataurl(img)
+            dataurl = self._image_dataurls.get(img)
             status = f"[{s.name}] {s.status()} · 已广播 {s.sent_frames} 帧"
-            _js(f"pushQR({_js_str(dataurl)}, {_js_str(status)})")
-            _overlay_js(f"pushOverlayQR({_js_str(dataurl)}, {_js_str(status)})")
+            publish_send_frame(dataurl, status)
             # 补发模式持续循环不自动停; 默认广播达到 max(5遍, 30s) 后自动暂停,
             # 仅结束循环线程, 保留 Sender 与 _pos, 点“继续广播”从暂停处续播。
             if not s._resend_indices and s.total:
@@ -366,12 +400,11 @@ class Api:
             return
         if task.is_text and text is not None:
             content = text.decode("utf-8", "replace")
-            # 静默写系统剪贴板 (不弹提示), 并把消息追加到前端消息列表。
+            # 静默写系统剪贴板，并把消息交给前端的有界历史列表展示。
             try:
                 self._set_clipboard(content)
             except Exception:
                 pass
-            self._messages.append(content)
             _js(f"addMessage({_js_str(content)})")
             task.cleanup()
             _js("onComplete(true, true, '')")

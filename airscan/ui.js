@@ -1,7 +1,7 @@
 const GRID_FPS_DEFAULTS = { 1: 8, 2: 5, 3: 3 };
+const HISTORY_ITEM_LIMIT = 5;
 window._fpsTouched = false;
 window._sendPaused = false;
-window._qrFocus = false;
 function api(name, ...args) {
   return window.pywebview.api[name](...args);
 }
@@ -59,22 +59,10 @@ function switchTab(tab) {
   document.getElementById('panel-send').classList.toggle('show', sending);
   document.getElementById('panel-recv').classList.toggle('show', !sending);
   if (!sending) {
-    setQrFocus(false);
     refreshWindows();
     loadDownloadDir();
   }
 }
-function setQrFocus(enabled) {
-  window._qrFocus = enabled;
-  document.body.classList.toggle('qr-focus', enabled);
-  const button = document.getElementById('btnQrFocus');
-  const label = enabled ? '显示控制区' : '隐藏控制区';
-  button.setAttribute('aria-pressed', String(enabled));
-  button.setAttribute('aria-label', label);
-  button.title = label;
-  button.innerText = enabled ? '▼' : '▲';
-}
-function toggleQrFocus() { setQrFocus(!window._qrFocus); }
 async function pickFile() {
   const name = await api('pick_file');
   if (!name) return;
@@ -123,7 +111,6 @@ async function startSend() {
   document.getElementById('btnResend').disabled = true;
   document.getElementById('btnResumeAll').disabled = true;
   document.getElementById('sendStatus').innerText = '正在处理...';
-  document.getElementById('qrStage').innerHTML = '<span class="placeholder">正在处理，请稍候...</span>';
 }
 function onSendReady(total, startIndex) {
   const input = document.getElementById('startIndex');
@@ -160,7 +147,6 @@ function onSendError(message) {
   document.getElementById('btnResend').disabled = true;
   document.getElementById('btnResumeAll').disabled = true;
   document.getElementById('sendStatus').innerText = '就绪';
-  document.getElementById('qrStage').innerHTML = '<span class="placeholder">二维码将显示在这里</span>';
 }
 async function startOrResumeSend() {
   if (window._sendPaused) {
@@ -217,16 +203,7 @@ async function startResend() {
   await applyResend(spec);
 }
 async function resumeAllFrames() { await applyResend(''); }
-function pushQR(dataurl, status) {
-  const stage = document.getElementById('qrStage');
-  let image = stage.querySelector('img');
-  if (!image) {
-    stage.innerHTML = '';
-    image = document.createElement('img');
-    image.alt = '正在广播的二维码';
-    stage.appendChild(image);
-  }
-  image.src = dataurl;
+function updateSendStatus(status) {
   document.getElementById('sendStatus').innerText = status;
 }
 async function startRecv() {
@@ -288,6 +265,12 @@ function onComplete(ok, isText, info, path, filename) {
   document.getElementById('recvStatus').innerText = info || '已保存 · 等待下一次发送';
   if (path) addFile(path, filename);
 }
+function prependHistoryItem(list, item) {
+  list.insertBefore(item, list.firstChild);
+  while (list.childElementCount > HISTORY_ITEM_LIMIT) {
+    list.lastElementChild.remove();
+  }
+}
 function addFile(path, filename) {
   document.getElementById('fileSection').style.display = 'block';
   const item = document.createElement('div');
@@ -308,7 +291,7 @@ function addFile(path, filename) {
   body.onclick = open;
   item.append(body, openBtn);
   const list = document.getElementById('fileList');
-  list.insertBefore(item, list.firstChild);
+  prependHistoryItem(list, item);
 }
 async function showMissing() {
   const summary = await api('get_missing');
@@ -362,13 +345,13 @@ function addMessage(text) {
   button.className = 'msg-copy';
   button.innerText = '复制';
   button.onclick = async () => {
-    await api('copy_text', text);
+    await api('copy_text', body.innerText);
     button.innerText = '完成';
     setTimeout(() => { button.innerText = '复制'; }, 1200);
   };
   item.append(body, button);
   const list = document.getElementById('msgList');
-  list.insertBefore(item, list.firstChild);
+  prependHistoryItem(list, item);
 }
 document.getElementById('inputText').addEventListener('keydown', event => {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;

@@ -144,6 +144,8 @@ class Sender:
         return img
 
     def next_image(self) -> Image.Image:
+        if self.grid == 1:
+            return self._next_cell()
         cells = self.grid * self.grid
         picks = [self._next_cell() for _ in range(cells)]
         return self._compose(picks)
