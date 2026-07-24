@@ -64,6 +64,7 @@ class Api:
         self._send_lock = threading.RLock()
         self._clipboard_watcher = ClipboardWatcher(self._on_clipboard_text)
         self._send_error_level = "m"
+        self._active_text = None
         self.fps = 8
         self._picked_file = None
         self._send_start_index = 1
@@ -105,6 +106,7 @@ class Api:
             self.sender = None
             self.fps = max(1, int(fps))
             self._send_error_level = err
+            self._active_text = src[1] if src[0] == "text" else None
             self._send_start_index = max(1, int(start_index))
             self._send_stop.clear()
             self.open_overlay()
@@ -218,6 +220,8 @@ class Api:
 
     def _on_clipboard_text(self, text):
         if self._send_stop.is_set() or self.sender is None:
+            return
+        if text == self._active_text:
             return
         self._replace_send_source(("text", text), self._send_error_level, self.fps)
 
