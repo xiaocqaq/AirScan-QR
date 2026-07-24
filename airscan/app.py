@@ -63,6 +63,7 @@ class Api:
         self._send_thread = None
         self._send_lock = threading.RLock()
         self._clipboard_watcher = ClipboardWatcher(self._on_clipboard_text)
+        self._clipboard_monitor_enabled = False
         self._send_error_level = "m"
         self._active_text = None
         self.fps = 8
@@ -104,6 +105,7 @@ class Api:
             if old and old.is_alive() and old is not threading.current_thread():
                 old.join()
             self.sender = None
+            self._clipboard_monitor_enabled = True
             self.fps = max(1, int(fps))
             self._send_error_level = err
             self._active_text = src[1] if src[0] == "text" else None
@@ -131,6 +133,7 @@ class Api:
             self._send_start_index = self.sender.start_index
         except Exception as e:
             _js(f"onSendError({_js_str(f'发送失败: {e}')})")
+            self._clipboard_monitor_enabled = False
             self._stop_clipboard_watch()
             self.close_overlay()
             return
@@ -143,6 +146,7 @@ class Api:
 
     def pause_send(self):
         self._send_stop.set()
+        self._clipboard_monitor_enabled = False
         self._stop_clipboard_watch()
         self.close_overlay()
         old = self._send_thread
@@ -174,6 +178,7 @@ class Api:
             return {"ok": True, "start_index": self._send_start_index,
                     "selection_count": count}
         self._send_stop.clear()
+        self._clipboard_monitor_enabled = True
         self.open_overlay()
         self._start_clipboard_watch()
         self._send_thread = threading.Thread(target=self._send_loop, daemon=True)
@@ -206,7 +211,6 @@ class Api:
                 elapsed = time.monotonic() - start
                 if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
                     self._send_stop.set()
-                    self._stop_clipboard_watch()
                     _overlay_js("onOverlayPaused('已自动暂停广播')")
                     _js(f"onSendAutoStopped({int(cycles)})")
                     break
@@ -219,11 +223,12 @@ class Api:
         self._clipboard_watcher.stop()
 
     def _on_clipboard_text(self, text):
-        if self._send_stop.is_set() or self.sender is None:
+        if not self._clipboard_monitor_enabled or self.sender is None:
             return
         if text == self._active_text:
             return
         self._replace_send_source(("text", text), self._send_error_level, self.fps)
+        _js("onClipboardSendStarted()")
 
     def _set_clipboard(self, text):
         self._clipboard_watcher.ignore_text(text)

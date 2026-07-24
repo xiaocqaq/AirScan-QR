@@ -18,19 +18,7 @@ OVERLAY_HTML = """
       font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       overflow: hidden;
     }
-    .shell { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 100vh; gap: 8px; padding: 8px; }
-    .bar { display: flex; align-items: center; gap: 8px; min-height: 32px; }
-    .title { font-weight: 700; flex: 1; }
-    button {
-      min-width: 44px;
-      min-height: 32px;
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-      background: #ffffff;
-      color: #0f172a;
-      cursor: pointer;
-    }
-    button:hover { background: #f1f5f9; }
+    .shell { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 100vh; gap: 8px; padding: 8px; }
     .stage {
       display: grid;
       place-items: center;
@@ -45,8 +33,6 @@ OVERLAY_HTML = """
     .status { min-height: 34px; color: #334155; overflow: hidden; text-overflow: ellipsis; }
     @media (prefers-color-scheme: dark) {
       body { background: #020617; color: #e2e8f0; }
-      button { background: #0f172a; border-color: #334155; color: #e2e8f0; }
-      button:hover { background: #1e293b; }
       .stage { background: #ffffff; border-color: #475569; }
       .status, .placeholder { color: #cbd5e1; }
     }
@@ -54,10 +40,6 @@ OVERLAY_HTML = """
 </head>
 <body>
   <main class="shell">
-    <div class="bar">
-      <div class="title">1×1 悬浮广播</div>
-      <button type="button" onclick="closeOverlay()" aria-label="关闭悬浮窗">关闭</button>
-    </div>
     <section class="stage" aria-label="正在广播的二维码">
       <div class="placeholder" id="placeholder">等待广播二维码</div>
       <img id="qr" alt="正在广播的二维码" style="display:none">
@@ -74,9 +56,6 @@ OVERLAY_HTML = """
     }
     function onOverlayPaused(message) {
       document.getElementById('status').innerText = message;
-    }
-    async function closeOverlay() {
-      await window.pywebview.api.close_overlay();
     }
   </script>
 </body>

@@ -141,7 +141,15 @@ function onSendAutoStopped(cycles) {
   document.getElementById('btnSend').innerText = '继续广播';
   document.getElementById('btnPauseSend').disabled = true;
   document.getElementById('sendStatus').innerText =
-    '已播 ' + cycles + ' 遍, 自动暂停 · 点“继续广播”可继续播放';
+     '已播 ' + cycles + ' 遍, 自动暂停 · 点“继续广播”可继续播放';
+}
+function onClipboardSendStarted() {
+  window._sending = true;
+  window._sendPaused = false;
+  document.getElementById('btnSend').disabled = true;
+  document.getElementById('btnSend').innerText = '开始广播';
+  document.getElementById('btnPauseSend').disabled = false;
+  document.getElementById('sendStatus').innerText = '检测到新剪贴板文本，重新广播中...';
 }
 function onSendError(message) {
   toast(message);
