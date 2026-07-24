@@ -14,7 +14,7 @@ python -m pip install segno pyzbar pillow pywebview pywin32 pyinstaller
 if errorlevel 1 goto :err
 
 echo [2/2] Building dist\AirScan-QR.exe...
-python -m PyInstaller --noconfirm AirScan-QR.spec
+python -m PyInstaller --noconfirm --upx-dir tools\upx-4.2.4-win64 AirScan-QR.spec
 if errorlevel 1 goto :err
 
 echo.

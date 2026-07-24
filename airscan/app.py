@@ -12,6 +12,8 @@ from PIL import Image
 
 from . import protocol as P
 from . import wincap
+from .clipboard import ClipboardWatcher, normalize_clipboard_text, read_clipboard_text
+from .overlay import OVERLAY_HTML
 from .sender import Sender, load_file, load_text, parse_frame_selection
 from .receiver import Receiver
 from .storage import default_download_dir, save_received_file, set_clipboard
@@ -35,6 +37,7 @@ def _js_str(s: str) -> str:
 
 
 _window = None  # 保持模块级，避免 pywebview introspect 内部 .NET 对象。
+_overlay_window = None
 _tray = None    # 托盘图标 (pystray.Icon)
 _really_quit = False  # True 时 closing 事件放行真正退出
 
@@ -44,11 +47,23 @@ def _js(code: str):
         _window.evaluate_js(code)
 
 
+def _overlay_js(code: str):
+    if _overlay_window is None:
+        return
+    try:
+        _overlay_window.evaluate_js(code)
+    except Exception:
+        pass
+
+
 class Api:
     def __init__(self):
         self.sender = None
         self._send_stop = threading.Event()
         self._send_thread = None
+        self._send_lock = threading.RLock()
+        self._clipboard_watcher = ClipboardWatcher(self._on_clipboard_text)
+        self._send_error_level = "m"
         self.fps = 8
         self._picked_file = None
         self._send_start_index = 1
@@ -75,22 +90,31 @@ class Api:
         elif text and text.strip():
             src = ("text", text)
         else:
-            return {"error": "请先输入文本或选择文件"}
-        self._send_stop.set()
-        old = self._send_thread
-        if old and old.is_alive() and old is not threading.current_thread():
-            old.join()
-        self.sender = None
-        self.fps = max(1, int(fps))
-        self._send_start_index = max(1, int(start_index))
-        self._send_stop.clear()
-        self._send_thread = threading.Thread(
-            target=self._build_and_send,
-            args=(src, err, int(grid), int(start_index)),
-            daemon=True,
-        )
-        self._send_thread.start()
-        return {"ok": True}
+            clipboard_text = normalize_clipboard_text(read_clipboard_text())
+            if not clipboard_text:
+                return {"error": "请先输入文本、选择文件或复制文本"}
+            src = ("text", clipboard_text)
+        return self._replace_send_source(src, err, fps, start_index)
+
+    def _replace_send_source(self, src, err, fps, start_index=1):
+        with self._send_lock:
+            self._send_stop.set()
+            old = self._send_thread
+            if old and old.is_alive() and old is not threading.current_thread():
+                old.join()
+            self.sender = None
+            self.fps = max(1, int(fps))
+            self._send_error_level = err
+            self._send_start_index = max(1, int(start_index))
+            self._send_stop.clear()
+            self.open_overlay()
+            self._send_thread = threading.Thread(
+                target=self._build_and_send,
+                args=(src, err, 1, self._send_start_index),
+                daemon=True,
+            )
+            self._send_thread.start()
+        return {"ok": True, "grid": 1}
 
     def _build_and_send(self, src, err, grid, start_index):
         try:
@@ -105,8 +129,11 @@ class Api:
             self._send_start_index = self.sender.start_index
         except Exception as e:
             _js(f"onSendError({_js_str(f'发送失败: {e}')})")
+            self._stop_clipboard_watch()
+            self.close_overlay()
             return
         _js(f"onSendReady({self.sender.total}, {self.sender.start_index})")
+        self._start_clipboard_watch()
         self._send_loop()
 
     def set_fps(self, fps):
@@ -114,6 +141,8 @@ class Api:
 
     def pause_send(self):
         self._send_stop.set()
+        self._stop_clipboard_watch()
+        self.close_overlay()
         old = self._send_thread
         if old and old.is_alive() and old is not threading.current_thread():
             old.join()
@@ -143,6 +172,8 @@ class Api:
             return {"ok": True, "start_index": self._send_start_index,
                     "selection_count": count}
         self._send_stop.clear()
+        self.open_overlay()
+        self._start_clipboard_watch()
         self._send_thread = threading.Thread(target=self._send_loop, daemon=True)
         self._send_thread.start()
         return {"ok": True, "start_index": self._send_start_index,
@@ -165,6 +196,7 @@ class Api:
             dataurl = _img_to_dataurl(img)
             status = f"[{s.name}] {s.status()} · 已广播 {s.sent_frames} 帧"
             _js(f"pushQR({_js_str(dataurl)}, {_js_str(status)})")
+            _overlay_js(f"pushOverlayQR({_js_str(dataurl)}, {_js_str(status)})")
             # 补发模式持续循环不自动停; 默认广播达到 max(5遍, 30s) 后自动暂停,
             # 仅结束循环线程, 保留 Sender 与 _pos, 点“继续广播”从暂停处续播。
             if not s._resend_indices and s.total:
@@ -172,9 +204,65 @@ class Api:
                 elapsed = time.monotonic() - start
                 if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
                     self._send_stop.set()
+                    self._stop_clipboard_watch()
+                    _overlay_js("onOverlayPaused('已自动暂停广播')")
                     _js(f"onSendAutoStopped({int(cycles)})")
                     break
             time.sleep(1.0 / max(1, self.fps))
+
+    def _start_clipboard_watch(self):
+        self._clipboard_watcher.start()
+
+    def _stop_clipboard_watch(self):
+        self._clipboard_watcher.stop()
+
+    def _on_clipboard_text(self, text):
+        if self._send_stop.is_set() or self.sender is None:
+            return
+        self._replace_send_source(("text", text), self._send_error_level, self.fps)
+
+    def _set_clipboard(self, text):
+        self._clipboard_watcher.ignore_text(text)
+        set_clipboard(text)
+
+    def open_overlay(self):
+        global _overlay_window
+        if _overlay_window is not None:
+            try:
+                _overlay_window.show()
+                return {"ok": True}
+            except Exception:
+                _overlay_window = None
+        _overlay_window = webview.create_window(
+            "AirScan-QR 悬浮广播",
+            html=OVERLAY_HTML,
+            js_api=self,
+            width=360,
+            height=420,
+            min_size=(180, 220),
+            resizable=True,
+            on_top=True,
+        )
+        try:
+            def on_closing():
+                global _overlay_window
+                _overlay_window = None
+                return True
+            _overlay_window.events.closing += on_closing
+        except Exception:
+            pass
+        return {"ok": True}
+
+    def close_overlay(self):
+        global _overlay_window
+        overlay = _overlay_window
+        _overlay_window = None
+        if overlay is not None:
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+        return {"ok": True}
 
     def list_windows(self):
         return wincap.list_windows()
@@ -271,7 +359,7 @@ class Api:
             content = text.decode("utf-8", "replace")
             # 静默写系统剪贴板 (不弹提示), 并把消息追加到前端消息列表。
             try:
-                set_clipboard(content)
+                self._set_clipboard(content)
             except Exception:
                 pass
             self._messages.append(content)
@@ -292,7 +380,7 @@ class Api:
     def copy_text(self, text):
         """逐条复制: 前端点消息旁的复制图标, 把该条文本重新写入剪贴板。"""
         try:
-            set_clipboard(text)
+            self._set_clipboard(text)
             return {"ok": True}
         except Exception:
             return {"ok": False}

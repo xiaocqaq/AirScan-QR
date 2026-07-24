@@ -113,6 +113,7 @@ async function startSend() {
     toast(result.error);
     return;
   }
+  if (result && result.grid) document.getElementById('gridSel').value = result.grid;
   document.getElementById('inputText').value = '';
   window._sending = true;
   window._sendPaused = false;

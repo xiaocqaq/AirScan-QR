@@ -17,7 +17,11 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['numpy', 'tkinter', 'PySide6', 'PyQt5', 'PyQt6', 'matplotlib', 'scipy', 'pandas'],
+    excludes=[
+        'numpy', 'tkinter', 'PySide6', 'PyQt5', 'PyQt6', 'matplotlib', 'scipy', 'pandas',
+        'PIL.AvifImagePlugin', 'PIL.WebPImagePlugin', 'PIL.ImageTk',
+        'cryptography', 'bcrypt',
+    ],
     noarchive=False,
     optimize=0,
 )
