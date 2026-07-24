@@ -16,6 +16,10 @@
       this.intervalMs = options.intervalMs || 60;
       this.stream = null;
       this.animationId = 0;
+      this.videoCallbackId = 0;
+      // 优先用 requestVideoFrameCallback：节奏跟真实解码帧，减少空转；
+      // 不支持时回退 requestAnimationFrame（旧浏览器 / 契约保留）。
+      this.useVideoCallback = typeof this.video.requestVideoFrameCallback === 'function';
       this.active = false;
       this.paused = false;
       this.processing = false;
@@ -24,9 +28,27 @@
       this.handleEnded = this.handleEnded.bind(this);
     }
 
+    scheduleNext() {
+      if (this.useVideoCallback) {
+        this.videoCallbackId = this.video.requestVideoFrameCallback(this.scan);
+      } else {
+        this.animationId = root.requestAnimationFrame(this.scan);
+      }
+    }
+
+    cancelScheduled() {
+      if (this.useVideoCallback && this.videoCallbackId
+        && typeof this.video.cancelVideoFrameCallback === 'function') {
+        this.video.cancelVideoFrameCallback(this.videoCallbackId);
+      }
+      root.cancelAnimationFrame(this.animationId);
+      this.videoCallbackId = 0;
+      this.animationId = 0;
+    }
+
     async scan(timestamp) {
       if (!this.active) return;
-      this.animationId = root.requestAnimationFrame(this.scan);
+      this.scheduleNext();
       const waiting = this.paused || this.processing || this.video.readyState < 2;
       if (waiting || timestamp - this.lastFrameAt < this.intervalMs) return;
       this.lastFrameAt = timestamp;
@@ -43,7 +65,7 @@
     handleEnded() {
       this.active = false;
       this.paused = false;
-      root.cancelAnimationFrame(this.animationId);
+      this.cancelScheduled();
       this.onEnded();
     }
 
@@ -88,7 +110,7 @@
       this.active = true;
       this.paused = false;
       this.lastFrameAt = 0;
-      this.animationId = root.requestAnimationFrame(this.scan);
+      this.scheduleNext();
       return this.stream;
     }
 
@@ -100,7 +122,7 @@
     stop() {
       this.active = false;
       this.paused = false;
-      root.cancelAnimationFrame(this.animationId);
+      this.cancelScheduled();
       if (this.stream) this.stream.getTracks().forEach((track) => track.stop());
       this.stream = null;
       this.video.srcObject = null;

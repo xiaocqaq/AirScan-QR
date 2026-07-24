@@ -2,8 +2,13 @@
 
 ## 打开方式
 
-双击 `receiver.html`，推荐使用 Chrome 或 Edge 120 及以上版本。页面不需要
-Python、本地服务或安装程序。
+推荐把本目录部署到 HTTP/HTTPS 服务器后访问，并保持联网：此时启用 ZXing 高速
+解码引擎（Web Worker + WebAssembly），识别率与吞吐明显更好。使用 Chrome 或
+Edge 120 及以上版本。
+
+也可以直接双击 `receiver.html` 打开。此时受浏览器 `file://` 安全策略限制，
+无法加载 Worker 与 WebAssembly，页面会自动回退到内置的 jsQR 解码器（能力较弱，
+见下文）。此模式仍不需要 Python、本地服务或安装程序。
 
 ## 接收文字
 
@@ -35,12 +40,23 @@ Python、本地服务或安装程序。
 
 ## 解码器加载
 
-页面优先从 jsDelivr 加载固定版本 jsQR 1.4.0；网络不可用时自动使用
-`vendor/jsQR.js` 本地副本。协议解析、分片存储和文件校验始终在本机浏览器内完成。
+页面有两条解码路径，自动择优：
+
+- **ZXing 引擎（快路径）**：服务器部署 + 联网时启用。解码在 Web Worker 中用
+  zxing-wasm（WebAssembly）完成，原生一次识别画面内全部二维码，容错和速度都强于
+  jsQR，且不占用主线程 UI。ZXing 的 JS 与 `.wasm` 均从 jsDelivr 按固定版本加载。
+- **jsQR 引擎（回退路径）**：无 Worker、`file://` 双击打开或 ZXing 初始化失败时
+  自动回退。优先从 jsDelivr 加载固定版本 jsQR 1.4.0，网络不可用时使用
+  `vendor/jsQR.js` 本地副本。
+
+协议解析、分片存储和文件校验始终在本机浏览器内完成。
 
 ## 识别优化说明
 
-网页端使用 jsQR，能力弱于桌面端 ZBar，因此做了速度优先的识别链路：
+快路径下 ZXing 在 Worker 内整帧原生多码解码，主线程只负责抓帧、落盘与 UI；
+采集循环优先用 `requestVideoFrameCallback` 跟随真实视频帧，减少空转。
+
+jsQR 回退路径能力弱于桌面端 ZBar，因此保留了速度优先的识别链路：
 
 - 小预览定位二维码亮区，再裁剪解码（避免 2K/4K 整帧硬扫）
 - 裁剪后缩放到 jsQR 友好尺寸，失败时再做亮度拉伸

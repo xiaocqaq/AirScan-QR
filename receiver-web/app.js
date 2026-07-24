@@ -15,6 +15,61 @@
   let initialization = null;
   let messageFeed = null;
   const payloadQueue = [];
+
+  // 解码 worker 客户端：worker 内用 ZXing 原生多码解码（离主线程），
+  // 任何环节不可用（无 Worker、file:// 双击、ZXing 初始化失败）都永久回退主线程 jsQR。
+  const decodeWorker = {
+    worker: null,
+    available: false,
+    nextId: 1,
+    pending: new Map(),
+    init() {
+      if (!global.Worker) return;
+      try {
+        this.worker = new global.Worker('decode-worker.js', { type: 'module' });
+      } catch (error) {
+        this.worker = null;
+        return;
+      }
+      this.available = true;
+      this.worker.onmessage = (event) => {
+        const { id, payloads, error } = event.data || {};
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        if (error) entry.reject(new Error(error));
+        else entry.resolve(payloads || []);
+      };
+      this.worker.onerror = () => this.disable(new Error('解码 worker 异常'));
+    },
+    disable(error) {
+      this.available = false;
+      for (const entry of this.pending.values()) entry.reject(error);
+      this.pending.clear();
+      if (this.worker) { this.worker.terminate(); this.worker = null; }
+    },
+    decode(bitmap, grid) {
+      return new Promise((resolve, reject) => {
+        const id = this.nextId;
+        this.nextId += 1;
+        this.pending.set(id, { resolve, reject });
+        this.worker.postMessage({ id, bitmap, grid }, [bitmap]);
+      });
+    },
+  };
+
+  // 优先 worker（ZXing）解码；失败则永久回退主线程 jsQR，保证不倒退到不可用。
+  async function decodeCanvas(canvas, grid) {
+    if (decodeWorker.available && global.createImageBitmap) {
+      try {
+        const bitmap = await global.createImageBitmap(canvas);
+        return await decodeWorker.decode(bitmap, grid);
+      } catch (error) {
+        decodeWorker.disable(error);
+      }
+    }
+    return global.AirScan.decoder.decodeFrame(canvas, grid);
+  }
   let payloadPumping = false;
   let pendingProgress = null;
   let progressTimer = 0;
@@ -160,8 +215,9 @@
   async function processFrame(video) {
     const canvas = drawVideoFrame(video);
     const grid = Number(byId('gridSelect').value);
-    // 仅在此 await 解码；落盘走队列，避免 IndexedDB 阻塞下一帧扫描
-    const payloads = await global.AirScan.decoder.decodeFrame(canvas, grid);
+    // 仅在此 await 解码；落盘走队列，避免 IndexedDB 阻塞下一帧扫描。
+    // 优先 worker（ZXing，离主线程）；不可用时回退主线程 jsQR。
+    const payloads = await decodeCanvas(canvas, grid);
     state.decodedFrames += 1;
     updateScanRate();
     byId('scanBadge').textContent = payloads.length
@@ -315,6 +371,8 @@
     });
     initialization = initializeReceiver();
     initialization.catch(() => {});
+    // 尝试启用解码 worker（ZXing）；不可用时静默回退主线程 jsQR。
+    decodeWorker.init();
     captureController = global.AirScan.capture.createCapture(byId('shareVideo'), {
       onFrame: processFrame,
       onEnded: onCaptureEnded,

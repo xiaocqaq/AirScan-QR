@@ -9,12 +9,35 @@
               <option name="provider" value="codex" />
               <option name="sessionId" value="019f8e7c-5d08-7341-a9be-44101506b3bb" />
               <option name="cwd" value="E:\workplace\AirScan-QR" />
-              <option name="model" value="grok-4.5" />
+              <option name="model" value="gpt-5.6-sol" />
+              <option name="permissionMode" value="bypassPermissions" />
+            </TabSessionState>
+          </value>
+        </entry>
+        <entry key="1">
+          <value>
+            <TabSessionState>
+              <option name="provider" value="codex" />
+              <option name="sessionId" value="019f91b0-49a3-7881-92bd-31152b16c34c" />
+              <option name="cwd" value="E:\workplace\AirScan-QR" />
+              <option name="model" value="gpt-5.6-sol" />
+              <option name="permissionMode" value="bypassPermissions" />
+            </TabSessionState>
+          </value>
+        </entry>
+        <entry key="2">
+          <value>
+            <TabSessionState>
+              <option name="provider" value="claude" />
+              <option name="sessionId" value="f6b5c997-285b-48b1-bc95-6178e8c899f7" />
+              <option name="cwd" value="E:\workplace\AirScan-QR" />
+              <option name="model" value="claude-opus-4-8[1m]" />
               <option name="permissionMode" value="bypassPermissions" />
             </TabSessionState>
           </value>
         </entry>
       </map>
     </option>
+    <option name="tabCount" value="3" />
   </component>
 </project>

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Decode Worker Smoke</title></head>
+<body data-result="pending">
+  <pre id="output">pending</pre>
+  <script src="../protocol.js"></script>
+  <script>
+    // 端到端冒烟：真实实例化 decode-worker.js（module worker），
+    // 先用 Phase 0 已验证的单码 data-frame.png 隔离 worker 路径，
+    // 再用多码 grid-2.png 验证原生多码。打印 worker 原始回复，避免误判。
+    const output = document.getElementById('output');
+    const lines = [];
+    function log(obj) { lines.push(obj); output.textContent = JSON.stringify(lines, null, 2); }
+
+    let worker;
+    function decodeVia(fixture, grid, id) {
+      return new Promise(async (resolve, reject) => {
+        const img = new Image();
+        img.src = fixture;
+        await img.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        const bitmap = await createImageBitmap(canvas);
+        const handler = (event) => {
+          if (!event.data || event.data.id !== id) return;
+          worker.removeEventListener('message', handler);
+          resolve(event.data);
+        };
+        worker.addEventListener('message', handler);
+        worker.postMessage({ id, bitmap, grid }, [bitmap]);
+      });
+    }
+
+    async function countValid(payloads) {
+      let valid = 0;
+      for (const payload of payloads || []) {
+        const raw = await window.AirScan.protocol.scramble(Uint8Array.from(payload));
+        if (window.AirScan.protocol.parseFrame(raw)) valid += 1;
+      }
+      return valid;
+    }
+
+    (async () => {
+      try {
+        worker = new Worker('../decode-worker.js', { type: 'module' });
+        worker.addEventListener('error', (e) => log({ workerError: e.message || 'error' }));
+
+        // 1) 单码路径（Phase 0 已证 readBarcodes 可解）
+        const single = await decodeVia('fixtures/data-frame.png', 1, 1);
+        log({ single: { raw: { id: single.id, engine: single.engine, error: single.error,
+          decoded: (single.payloads || []).length }, valid: await countValid(single.payloads) } });
+
+        // 2) 多码路径
+        const multi = await decodeVia('fixtures/grid-2.png', 2, 2);
+        log({ multi: { raw: { id: multi.id, engine: multi.engine, error: multi.error,
+          decoded: (multi.payloads || []).length }, valid: await countValid(multi.payloads) } });
+
+        const singleValid = await countValid(single.payloads);
+        const multiValid = await countValid(multi.payloads);
+        document.body.dataset.result = (singleValid >= 1 && multiValid >= 1) ? 'ok' : 'fail';
+      } catch (error) {
+        log({ fatal: String((error && error.stack) || error) });
+        document.body.dataset.result = 'fail';
+      }
+    })();
+  </script>
+</body>
+</html>
