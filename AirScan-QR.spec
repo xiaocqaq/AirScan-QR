@@ -47,4 +47,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['airscan\\icon.ico'],
+    version='version_info.txt',
 )

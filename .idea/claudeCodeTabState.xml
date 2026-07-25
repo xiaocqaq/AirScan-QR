@@ -9,7 +9,7 @@
               <option name="provider" value="claude" />
               <option name="sessionId" value="a7886c41-a074-4331-9284-f19bf38636f5" />
               <option name="cwd" value="D:\code\AirScan-QR-master" />
-              <option name="model" value="claude-fable-5[1m]" />
+              <option name="model" value="claude-opus-4-8[1m]" />
               <option name="permissionMode" value="bypassPermissions" />
             </TabSessionState>
           </value>

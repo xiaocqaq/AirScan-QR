@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 from datetime import datetime
 
 MANIFEST_VERSION = 1
@@ -34,6 +35,101 @@ DEFAULT_IGNORE_DIRS = frozenset({
     ".pytest_cache", ".mypy_cache", "venv", ".venv",
 })
 DEFAULT_IGNORE_GLOBS = ("*.pyc", "*.pyo", "*.tmp", "*.swp", "*~")
+
+# Windows 下运行 git 时不弹出控制台窗口。
+_CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+def _git_exe() -> str:
+    return shutil.which("git") or "git"
+
+
+def _run_git(repo_root: str, *args) -> str:
+    """在 repo_root 里跑 git, 返回 stdout (bytes 解码为 utf-8)。失败抛异常。"""
+    proc = subprocess.run(
+        [_git_exe(), "-C", repo_root, *args],
+        capture_output=True,
+        creationflags=_CREATE_NO_WINDOW,
+    )
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(err or f"git {' '.join(args)} 失败 (code {proc.returncode})")
+    return proc.stdout.decode("utf-8", "replace")
+
+
+def is_git_repo(repo_root: str) -> bool:
+    """repo_root 是否在一个 git 工作区内。"""
+    try:
+        out = _run_git(repo_root, "rev-parse", "--is-inside-work-tree")
+        return out.strip() == "true"
+    except Exception:
+        return False
+
+
+def git_changed_files(repo_root: str) -> dict:
+    """基于 git status 返回工作区相对 HEAD 的变动。
+
+    返回 {"send": [rel...], "delete": [rel...]} 均升序、正斜杠。
+    - send: 当前存在于工作区的变动文件 (修改/新增/未跟踪/重命名后的新名)
+    - delete: 已从工作区删除的文件 (含重命名的旧名)
+    尊重 .gitignore (git status 默认不列被忽略文件)。-uall 展开未跟踪目录里的每个文件。
+    """
+    repo_root = os.path.abspath(repo_root)
+    # -z: NUL 分隔且不转义路径 (中文/空格安全); --porcelain: 稳定机器格式。
+    raw = _run_git(repo_root, "status", "--porcelain", "-z", "-uall")
+    fields = raw.split("\0")
+    send, delete = set(), set()
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        if not entry:
+            i += 1
+            continue
+        # 每条: "XY <path>"; XY 为两字符状态码, 随后空格, 再路径。
+        status = entry[:2]
+        path = entry[3:]
+        i += 1
+        # 重命名/复制 (R/C): 紧跟一个 NUL 字段是原路径。
+        if status and status[0] in ("R", "C"):
+            orig = fields[i] if i < len(fields) else ""
+            i += 1
+            if orig:
+                # 原名在工作区已不存在 (重命名) -> 删除旧名。
+                full_orig = os.path.join(repo_root, orig.replace("/", os.sep))
+                if not os.path.exists(full_orig):
+                    delete.add(_norm_rel(orig))
+        # 按磁盘是否存在归类: 存在=需推送, 不存在=已删除。
+        full = os.path.join(repo_root, path.replace("/", os.sep))
+        if os.path.exists(full):
+            if os.path.isfile(full):
+                send.add(_norm_rel(path))
+        else:
+            delete.add(_norm_rel(path))
+    return {"send": sorted(send), "delete": sorted(delete)}
+
+
+def git_build_output(repo_root: str, out_root: str) -> dict:
+    """宿主机: 用 git 变动生成待粘贴的输出文件夹 (partial plan)。
+
+    - send 文件按相对路径复制进 out_root (保留目录结构)。
+    - 写 .airscan-sync/plan.json: 删除清单 + 变动文件的 size/mtime 清单 + partial 标记。
+    返回摘要 dict。
+    """
+    repo_root = os.path.abspath(repo_root)
+    diff = git_changed_files(repo_root)
+    # 只对 send 文件建 size/mtime 清单 (供云端校正 mtime + 部分校验)。
+    manifest = {}
+    for rel in diff["send"]:
+        full = os.path.join(repo_root, rel.replace("/", os.sep))
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        manifest[rel] = (st.st_size, st.st_mtime_ns)
+    root_name = os.path.basename(os.path.normpath(repo_root))
+    summary = build_output_folder(repo_root, out_root, diff, manifest,
+                                  root_name=root_name, partial=True)
+    return summary
 
 
 def _norm_rel(path: str) -> str:
@@ -118,11 +214,13 @@ def diff_manifests(source: dict, target: dict) -> dict:
 
 
 def build_output_folder(source_root: str, out_root: str, diff: dict,
-                        source_manifest: dict, root_name: str = "") -> dict:
+                        source_manifest: dict, root_name: str = "",
+                        partial: bool = False) -> dict:
     """在 out_root 生成待粘贴的输出文件夹。
 
     - diff["send"] 里的文件按相对路径复制进来 (保留目录结构)。
-    - 写 .airscan-sync/plan.json: 删除清单 + 宿主机完整清单 + 清单 SHA-1。
+    - 写 .airscan-sync/plan.json: 删除清单 + 宿主机清单 + 清单 SHA-1。
+    - partial=True: 清单只含变动文件 (git 模式), 云端校验不检查多余文件。
     返回摘要 dict。
     """
     source_root = os.path.abspath(source_root)
@@ -141,6 +239,7 @@ def build_output_folder(source_root: str, out_root: str, diff: dict,
         "v": MANIFEST_VERSION,
         "root": root_name,
         "created": datetime.now().isoformat(timespec="seconds"),
+        "partial": bool(partial),
         "delete": list(diff["delete"]),
         "manifest": [[rel, size, mtime_ns]
                      for rel, (size, mtime_ns) in sorted(source_manifest.items())],
@@ -156,6 +255,7 @@ def build_output_folder(source_root: str, out_root: str, diff: dict,
         "delete_count": len(diff["delete"]),
         "out_root": out_root,
         "manifest_sha1": plan["manifest_sha1"],
+        "partial": bool(partial),
     }
 
 
@@ -229,8 +329,10 @@ def apply_sync(applied_root: str, target_root: str) -> dict:
         except OSError:
             pass
 
-    # 4. 校验一致性。
-    ok, mismatches = verify(target_root, source_manifest)
+    # 4. 校验一致性。partial (git 变动) 清单只覆盖变动文件, 不能把目标里
+    #    未变动的文件误判为 extra, 故 partial 时关闭 extra 检查。
+    check_extra = not plan.get("partial", False)
+    ok, mismatches = verify(target_root, source_manifest, check_extra=check_extra)
     return {
         "applied": applied,
         "deleted": deleted,
@@ -242,11 +344,13 @@ def apply_sync(applied_root: str, target_root: str) -> dict:
     }
 
 
-def verify(target_root: str, expected_manifest: dict):
+def verify(target_root: str, expected_manifest: dict, check_extra: bool = True):
     """重新扫描目标, 与期望清单比对。返回 (ok, mismatches)。
 
     mismatches: [{"path", "reason"}]  reason ∈ {missing, extra, size, mtime}。
     忽略 .airscan-sync-backup (备份目录不参与一致性判断)。
+    check_extra=False 时不把清单外的文件报为 extra (partial/git 部分同步用:
+    目标里大量未变动文件本就不在部分清单内, 不应误报)。
     """
     actual = scan_folder(target_root)
     mismatches = []
@@ -258,7 +362,8 @@ def verify(target_root: str, expected_manifest: dict):
             mismatches.append({"path": rel, "reason": "size"})
         elif actual_sig[1] != sig[1]:
             mismatches.append({"path": rel, "reason": "mtime"})
-    for rel in actual:
-        if rel not in expected_manifest:
-            mismatches.append({"path": rel, "reason": "extra"})
+    if check_extra:
+        for rel in actual:
+            if rel not in expected_manifest:
+                mismatches.append({"path": rel, "reason": "extra"})
     return (not mismatches), mismatches

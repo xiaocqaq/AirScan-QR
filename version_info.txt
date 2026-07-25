@@ -1,0 +1,35 @@
+# UTF-8
+#
+# Windows 版本资源: 让 exe 属性 -> 详细信息里显示版本号。
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 5, 1, 0),
+    prodvers=(1, 5, 1, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          "040904B0",
+          [
+            StringStruct("CompanyName", "AirScan-QR"),
+            StringStruct("FileDescription", "AirScan-QR 屏幕二维码流 · PC → PC"),
+            StringStruct("FileVersion", "1.5.1.0"),
+            StringStruct("InternalName", "AirScan-QR"),
+            StringStruct("OriginalFilename", "AirScan-QR.exe"),
+            StringStruct("ProductName", "AirScan-QR"),
+            StringStruct("ProductVersion", "1.5.1.0"),
+            StringStruct("LegalCopyright", "AirScan-QR"),
+          ],
+        ),
+      ]
+    ),
+    VarFileInfo([VarStruct("Translation", [1033, 1200])]),
+  ],
+)

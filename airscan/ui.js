@@ -354,7 +354,7 @@ function addMessage(text) {
   const list = document.getElementById('msgList');
   prependHistoryItem(list, item);
 }
-/* --- 文件夹同步 --- */
+/* --- 文件夹同步 (基于 git 变动) --- */
 window._syncFolders = { cloudTarget: null, applied: null, source: null };
 const SYNC_FOLDER_LABELS = {
   cloudTarget: 'syncCloudFolder',
@@ -375,11 +375,9 @@ async function syncPickFolder(target) {
     label.classList.add('set');
   }
   if (target === 'cloudTarget') {
-    // 云端目标文件夹同时驱动 ① 广播 和 ④ 应用。
-    document.getElementById('btnSyncBroadcast').disabled = false;
     refreshSyncApplyEnabled();
   } else if (target === 'source') {
-    document.getElementById('btnSyncDiff').disabled = false;
+    document.getElementById('btnSyncBuild').disabled = false;
   } else if (target === 'applied') {
     refreshSyncApplyEnabled();
   }
@@ -412,50 +410,38 @@ function onSyncFolderDropped(folder) {
   // drop 的真实路径由 pywebview 的 Python 处理器负责; 这里仅收尾高亮。
   zone.addEventListener('drop', (e) => { stop(e); });
 })();
-async function syncBroadcast() {
-  const folder = window._syncFolders.cloudTarget;
-  if (!folder) { toast('请先选择目标文件夹'); return; }
-  const result = await api('sync_broadcast_manifest', folder);
-  if (result && result.error) { toast(result.error); return; }
-  document.getElementById('syncBroadcastStatus').innerText =
-    `正在广播清单 · ${result.files} 个文件（${result.root}）`;
-  document.getElementById('syncStatus').innerText =
-    '清单广播中 · 让宿主机在“接收”页锁定本窗口收清单';
-}
-async function syncDiff() {
+// 宿主机(源): 用 git 变动一键生成输出文件夹。
+async function syncBuild() {
   const folder = window._syncFolders.source;
-  if (!folder) { toast('请先选择本地源文件夹'); return; }
-  const result = await api('sync_compute_diff', folder);
-  if (result && result.error) { toast(result.error); return; }
+  if (!folder) { toast('请先选择本地 git 仓库'); return; }
+  const btn = document.getElementById('btnSyncBuild');
+  btn.disabled = true;
+  const result = await api('sync_git_build', folder);
+  btn.disabled = false;
+  if (result && result.error) {
+    toast(result.error);
+    document.getElementById('syncStatus').innerText = result.error;
+    return;
+  }
   const box = document.getElementById('syncDiffResult');
   box.innerText =
-    `新增/修改 ${result.send_count} 个 · 待删除 ${result.delete_count} 个`;
+    `已生成并打开：${result.out_root}\n变动 ${result.copied} 个 · 删除 ${result.delete_count} 个`;
   box.classList.add('show');
-  document.getElementById('btnSyncBuild').disabled =
-    !(result.send_count || result.delete_count);
-  document.getElementById('syncStatus').innerText = result.send_count || result.delete_count
-    ? '已算出差异 · 点“生成并打开输出文件夹”'
-    : '两端已一致，无需同步';
-}
-async function syncBuild() {
-  const result = await api('sync_build_output');
-  if (result && result.error) { toast(result.error); return; }
-  document.getElementById('syncDiffResult').innerText =
-    `已生成并打开：${result.out_root}（复制 ${result.copied} 个文件，删除 ${result.delete_count} 个）`;
   document.getElementById('syncStatus').innerText =
-    '输出文件夹已打开 · 在资源管理器里整份复制粘贴到云端后执行第 ④ 步';
+    '输出文件夹已打开 · 整份拖到左侧“云端”栏或粘贴到云端后应用同步';
 }
+// 云端(目标): 应用粘贴/拖入的输出文件夹。
 async function syncApply() {
   const applied = window._syncFolders.applied;
   const target = window._syncFolders.cloudTarget;
-  if (!applied || !target) { toast('请先选择上方目标文件夹和粘贴进来的文件夹'); return; }
+  if (!applied || !target) { toast('请先选择目标仓库并拖入/选择输出文件夹'); return; }
   const result = await api('sync_apply', applied, target);
   if (result && result.error) { toast(result.error); return; }
   const status = document.getElementById('syncApplyStatus');
   if (result.ok_flag) {
     status.innerText =
-      `同步完成，文件一致 · 应用 ${result.applied} 个 · 删除 ${result.deleted} 个 · 校正 ${result.corrected} 个时间戳`;
-    document.getElementById('syncStatus').innerText = '同步完成，两端文件一致';
+      `同步完成 · 应用 ${result.applied} 个 · 删除 ${result.deleted} 个 · 校正 ${result.corrected} 个时间戳`;
+    document.getElementById('syncStatus').innerText = '同步完成，变动文件已落到目标仓库';
   } else {
     const detail = (result.mismatches || []).slice(0, 5)
       .map(m => `${m.path}(${m.reason})`).join('、');
@@ -463,11 +449,6 @@ async function syncApply() {
       `已应用但仍有 ${result.mismatches.length} 处不一致：${detail}${result.mismatches.length > 5 ? ' …' : ''}`;
     document.getElementById('syncStatus').innerText = '同步后仍有差异，请检查上方列表';
   }
-}
-function onSyncManifest(rootName, count) {
-  document.getElementById('syncManifestStatus').innerText =
-    `已收到云端清单：${rootName} · ${count} 个文件`;
-  toast('已收到云端清单');
 }
 function onSyncError(message) {
   toast(message);

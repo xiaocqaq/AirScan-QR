@@ -223,13 +223,15 @@ class ClipboardWatcher:
         sequence = self.sequence_reader()
         if sequence is not None and sequence == self._last_sequence:
             return
+        # 先记录本次序号: 非文本内容 (图片/文件) 读到 None 也不再每轮重读,
+        # 避免监听器每 interval 反复 OpenClipboard 抢占, 干扰其他程序粘贴图片。
+        self._last_sequence = sequence
         text = normalize_clipboard_text(self.reader())
         if text is None:
             return
         if sequence is None and text == self._last_text:
             return
         self._last_text = text
-        self._last_sequence = sequence
         if text == self._ignored_text:
             self._ignored_text = None
             return

@@ -111,69 +111,63 @@
     <section class="panel" id="panel-sync">
       <div class="card sync-flow-card">
         <div class="sync-flow-hint">
-          一个同步回合：<b>云端</b>广播清单（二维码）→ <b>宿主机</b>锁定云端窗口收清单、算差异、生成输出文件夹 →
-          把输出文件夹整份粘贴到云端 → <b>云端</b>点“应用同步”。
+          基于 <b>git</b> 变动同步：<b>宿主机</b>在 git 仓库里生成"变动文件夹"（未提交的改动 + 新文件）→
+          把它拖/粘贴到<b>云端</b> → <b>云端</b>选目标仓库后点“应用同步”，变动文件按同层级覆盖，删除的移入备份。
         </div>
       </div>
 
       <div class="sync-columns">
         <div class="card sync-role-card">
+          <div class="sync-role-title"><span class="sync-role-icon">🖥️</span>宿主机 · 源
+            <small class="sync-role-sub">代码在这里改，用 git 找出变动</small>
+          </div>
+          <div class="sync-step">
+            <div class="sync-step-label"><span class="sync-num">1</span>选择 git 仓库</div>
+            <div class="row">
+              <button class="btn btn-gray" onclick="syncPickFolder('source')">选择本地 git 仓库</button>
+              <span class="field-name" id="syncSourceFolder">未选择</span>
+            </div>
+          </div>
+          <div class="sync-step">
+            <div class="sync-step-label"><span class="sync-num">2</span>生成变动文件夹</div>
+            <div class="row">
+              <button class="btn btn-primary" id="btnSyncBuild" onclick="syncBuild()" disabled>生成变动文件夹</button>
+              <span class="sync-inline-status" id="syncBuildStatus"></span>
+            </div>
+            <div class="sync-diff-result" id="syncDiffResult"></div>
+            <div class="hint-line">按 git 未提交改动（含未跟踪新文件、尊重 .gitignore）挑出变动文件，生成后自动打开。把整个文件夹拖到右侧云端。</div>
+          </div>
+        </div>
+
+        <div class="card sync-role-card">
           <div class="sync-role-title"><span class="sync-role-icon">☁️</span>云端 · 目标机
             <small class="sync-role-sub">代码要同步成和宿主机一致</small>
           </div>
           <div class="sync-step">
-            <div class="sync-step-label">目标文件夹（①广播与④应用都用它）</div>
+            <div class="sync-step-label"><span class="sync-num">1</span>选择目标 git 仓库</div>
             <div class="row">
-              <button class="btn btn-gray" onclick="syncPickFolder('cloudTarget')">选择目标文件夹</button>
+              <button class="btn btn-gray" onclick="syncPickFolder('cloudTarget')">选择目标仓库</button>
               <span class="field-name" id="syncCloudFolder">未选择</span>
             </div>
           </div>
           <div class="sync-step">
-            <div class="sync-step-label"><span class="sync-num">1</span>广播清单</div>
-            <div class="row">
-              <button class="btn btn-primary" id="btnSyncBroadcast" onclick="syncBroadcast()" disabled>广播清单</button>
-              <span class="sync-inline-status" id="syncBroadcastStatus"></span>
-            </div>
-            <div class="hint-line">广播后清单会显示在悬浮二维码窗口，让宿主机锁定该窗口接收。</div>
-          </div>
-          <div class="sync-step">
-            <div class="sync-step-label"><span class="sync-num">4</span>应用同步</div>
+            <div class="sync-step-label"><span class="sync-num">2</span>拖入变动文件夹</div>
             <div class="sync-drop-zone" id="syncDropZone">
               <div class="sync-drop-icon">📁</div>
-              <div class="sync-drop-text">把宿主机生成的输出文件夹拖到这里</div>
+              <div class="sync-drop-text">把宿主机生成的变动文件夹拖到这里</div>
               <div class="field-name" id="syncAppliedFolder">未选择</div>
             </div>
             <div class="row">
               <button class="btn btn-gray" onclick="syncPickFolder('applied')">或手动选择文件夹</button>
             </div>
+          </div>
+          <div class="sync-step">
+            <div class="sync-step-label"><span class="sync-num">3</span>应用同步</div>
             <div class="row">
               <button class="btn btn-primary" id="btnSyncApply" onclick="syncApply()" disabled>应用同步</button>
               <span class="sync-inline-status" id="syncApplyStatus"></span>
             </div>
-            <div class="hint-line">把宿主机第 ③ 步生成的输出文件夹整份拖进上面的框（或手动选择），再点“应用同步”。多余文件会移入 .airscan-sync-backup 备份，不会物理删除。</div>
-          </div>
-        </div>
-
-        <div class="card sync-role-card">
-          <div class="sync-role-title"><span class="sync-role-icon">🖥️</span>宿主机 · 源
-            <small class="sync-role-sub">代码在这里改</small>
-          </div>
-          <div class="sync-step">
-            <div class="sync-step-label"><span class="sync-num">2</span>先在“接收”页锁定云端窗口收清单</div>
-            <div class="sync-inline-status" id="syncManifestStatus">尚未收到云端清单</div>
-          </div>
-          <div class="sync-step">
-            <div class="sync-step-label"><span class="sync-num">3</span>计算差异并生成输出文件夹</div>
-            <div class="row">
-              <button class="btn btn-gray" onclick="syncPickFolder('source')">选择本地源文件夹</button>
-              <span class="field-name" id="syncSourceFolder">未选择</span>
-            </div>
-            <div class="row">
-              <button class="btn btn-primary" id="btnSyncDiff" onclick="syncDiff()" disabled>计算差异</button>
-              <button class="btn btn-gray" id="btnSyncBuild" onclick="syncBuild()" disabled>生成并打开输出文件夹</button>
-            </div>
-            <div class="sync-diff-result" id="syncDiffResult"></div>
-            <div class="hint-line">生成后会打开输出文件夹，在里面按 Ctrl+A 全选、Ctrl+C 复制，粘贴到云端，再让云端执行第 ④ 步。</div>
+            <div class="hint-line">变动文件按同层级覆盖到目标仓库，删除的文件移入 .airscan-sync-backup 备份，不会物理删除。</div>
           </div>
         </div>
       </div>
