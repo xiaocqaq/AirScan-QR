@@ -194,6 +194,22 @@
       </div>
     </div>
   </div>
+  <div class="modal-backdrop" id="confirmModal" role="dialog" aria-modal="true"
+    aria-labelledby="confirmTitle" onclick="onConfirmBackdrop(event)">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title" id="confirmTitle">确认</div>
+        <button class="modal-close" onclick="closeConfirm(false)" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="confirm-text" id="confirmText"></div>
+        <div class="modal-actions">
+          <button class="btn btn-gray" onclick="closeConfirm(false)">取消</button>
+          <button class="btn btn-primary" id="confirmOk" onclick="closeConfirm(true)">确定</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <script src="ui.js"></script>
 </body>
 </html>

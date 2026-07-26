@@ -273,7 +273,7 @@ async function pauseRecv() {
   pauseRecvTimer();
 }
 async function resetRecv() {
-  if (!window.confirm('确定清空当前接收进度吗？')) return;
+  if (!(await confirmDialog('确定清空当前接收进度吗？'))) return;
   await api('reset_recv');
   document.getElementById('btnRecv').innerText = '开始接收';
   document.getElementById('btnRecv').disabled = !document.getElementById('winSel').value;
@@ -361,6 +361,23 @@ function closeMissing() {
 }
 function onMissingBackdrop(event) {
   if (event.target.id === 'missingModal') closeMissing();
+}
+/* --- 应用内确认框 (替代原生 confirm, 避免 WebView2 带来的 "127.0.0.1 显示" 前缀) --- */
+window._confirmResolve = null;
+function confirmDialog(text) {
+  document.getElementById('confirmText').innerText = text;
+  document.getElementById('confirmModal').classList.add('show');
+  document.getElementById('confirmOk').focus();
+  return new Promise(resolve => { window._confirmResolve = resolve; });
+}
+function closeConfirm(ok) {
+  document.getElementById('confirmModal').classList.remove('show');
+  const resolve = window._confirmResolve;
+  window._confirmResolve = null;
+  if (resolve) resolve(!!ok);
+}
+function onConfirmBackdrop(event) {
+  if (event.target.id === 'confirmModal') closeConfirm(false);
 }
 async function copyMissing() {
   await api('copy_text', document.getElementById('missingRanges').innerText);
@@ -513,5 +530,7 @@ document.getElementById('inputText').addEventListener('keydown', event => {
   startSend();
 });
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape') closeMissing();
+  if (event.key !== 'Escape') return;
+  closeMissing();
+  if (window._confirmResolve) closeConfirm(false);
 });

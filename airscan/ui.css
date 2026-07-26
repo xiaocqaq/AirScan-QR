@@ -305,6 +305,7 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
 .missing-meta { margin-bottom: 10px; color: var(--ink2); font-size: 13px; }
 .missing-ranges { max-height: 220px; overflow: auto; padding: 14px; border: 1px solid var(--card-brd); border-radius: 10px; background: var(--field); color: var(--ink); font: 13px/1.65 "Consolas", monospace; white-space: pre-wrap; word-break: break-word; user-select: text; }
 .modal-actions { justify-content: flex-end; margin-top: 14px; }
+.confirm-text { color: var(--ink); font-size: 14px; line-height: 1.6; }
 
 @media (max-width: 700px) {
   .topbar, .content { padding-inline: 16px; }
