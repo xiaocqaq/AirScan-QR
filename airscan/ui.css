@@ -161,6 +161,9 @@ textarea {
 }
 textarea::placeholder { color: var(--muted); }
 textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+/* 隐藏滚动条 (仍可滚轮/拖选滚动), 保持输入框整洁。 */
+textarea { scrollbar-width: none; }
+textarea::-webkit-scrollbar { width: 0; height: 0; }
 .row { display: flex; align-items: center; gap: var(--chrome-gap); margin-top: var(--chrome-gap); flex-wrap: wrap; }
 .source-row { flex-wrap: nowrap; }
 .field-name {
@@ -267,6 +270,8 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
 .recv-file { max-width: 45%; overflow: hidden; color: var(--accent); font-size: 14px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .prog-num { flex-shrink: 0; color: var(--ink2); font: 800 15px "Consolas", monospace; }
 .prog-num.ok { color: var(--ok); }
+.recv-timer { flex-shrink: 0; color: var(--muted); font: 700 14px "Consolas", monospace; }
+.recv-timer.ok { color: var(--ok); }
 .prog-line .pbar-wrap { flex: 1; margin: 0; }
 .pbar-wrap { height: 8px; overflow: hidden; margin-bottom: 10px; border-radius: 999px; background: var(--line); }
 .pbar { width: 0; height: 100%; border-radius: 999px; background: var(--accent); transition: width .2s ease; }

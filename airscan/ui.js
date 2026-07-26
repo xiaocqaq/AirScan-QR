@@ -5,6 +5,50 @@ window._sendPaused = false;
 function api(name, ...args) {
   return window.pywebview.api[name](...args);
 }
+
+/* --- 接收用时计时 (累计式, 支持暂停/继续, 完成后冻结) --- */
+const recvTimer = { elapsedMs: 0, runSince: null, ticker: null };
+function formatDuration(totalMs) {
+  const totalSec = Math.floor(Math.max(0, totalMs) / 1000);
+  const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+  const ss = String(totalSec % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+function recvTimerValueMs() {
+  return recvTimer.elapsedMs + (recvTimer.runSince ? Date.now() - recvTimer.runSince : 0);
+}
+function recvTimerText() {
+  return formatDuration(recvTimerValueMs());
+}
+function renderRecvTimer() {
+  const el = document.getElementById('recvTimer');
+  if (!el) return;
+  el.innerText = recvTimerText();
+  el.classList.toggle('running', recvTimer.runSince !== null);
+}
+function startRecvTimer(reset) {
+  if (reset) recvTimer.elapsedMs = 0;
+  if (recvTimer.runSince === null) recvTimer.runSince = Date.now();
+  renderRecvTimer();
+  if (!recvTimer.ticker) recvTimer.ticker = setInterval(renderRecvTimer, 500);
+}
+function pauseRecvTimer() {
+  if (recvTimer.runSince !== null) {
+    recvTimer.elapsedMs += Date.now() - recvTimer.runSince;
+    recvTimer.runSince = null;
+  }
+  if (recvTimer.ticker) { clearInterval(recvTimer.ticker); recvTimer.ticker = null; }
+  renderRecvTimer();
+}
+function stopRecvTimer() {
+  pauseRecvTimer();  // 冻结在最终用时
+}
+function resetRecvTimer() {
+  recvTimer.elapsedMs = 0;
+  recvTimer.runSince = null;
+  if (recvTimer.ticker) { clearInterval(recvTimer.ticker); recvTimer.ticker = null; }
+  renderRecvTimer();
+}
 function toast(msg) {
   const element = document.getElementById('toast');
   element.innerText = msg;
@@ -217,6 +261,8 @@ async function startRecv() {
   document.getElementById('btnRecv').innerText = '继续接收';
   document.getElementById('btnPauseRecv').disabled = false;
   document.getElementById('recvStatus').innerText = result.resumed ? '继续接收中...' : '接收中...';
+  // 继续接收时恢复计时 (若已有任务在计时); 新任务的计时由 onMeta 重置启动。
+  if (result.resumed) startRecvTimer(false);
 }
 async function pauseRecv() {
   await api('pause_recv');
@@ -224,6 +270,7 @@ async function pauseRecv() {
   document.getElementById('btnRecv').innerText = '继续接收';
   document.getElementById('btnPauseRecv').disabled = true;
   document.getElementById('recvStatus').innerText = '已暂停 · 当前进度已保留';
+  pauseRecvTimer();
 }
 async function resetRecv() {
   if (!window.confirm('确定清空当前接收进度吗？')) return;
@@ -237,6 +284,7 @@ async function resetRecv() {
   document.getElementById('progBig').innerText = '-';
   document.getElementById('pbar').style.width = '0%';
   document.getElementById('recvStatus').innerText = '任务已重置';
+  resetRecvTimer();
 }
 function onMeta(name, total, isText) {
   document.getElementById('recvFile').innerText = isText ? '文本消息' : name;
@@ -245,6 +293,9 @@ function onMeta(name, total, isText) {
   document.getElementById('pbar').style.width = '0%';
   document.getElementById('btnMissing').disabled = false;
   document.getElementById('btnResetRecv').disabled = false;
+  // 新任务开始接收: 计时清零并开始走表 (文件模式才显示用时统计)。
+  if (!isText) startRecvTimer(true);
+  else resetRecvTimer();
 }
 function onProgress(got, total) {
   document.getElementById('progBig').innerText = `${got}/${total}`;
@@ -263,7 +314,9 @@ function onComplete(ok, isText, info, path, filename) {
   }
   progress.classList.add('ok');
   progress.innerText = '完成';
-  document.getElementById('recvStatus').innerText = info || '已保存 · 等待下一次发送';
+  stopRecvTimer();  // 冻结最终用时
+  const info2 = info ? `${info} · 用时 ${recvTimerText()}` : info;
+  document.getElementById('recvStatus').innerText = info2 || '已保存 · 等待下一次发送';
   if (path) addFile(path, filename);
 }
 function prependHistoryItem(list, item) {
