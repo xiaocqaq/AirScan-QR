@@ -11,15 +11,10 @@ import os
 import random
 import re
 import string
-from collections import OrderedDict
 
 from PIL import Image
 
 from . import protocol as P
-
-# 已渲染 QR 图缓存上限 (帧数)。高帧数文件下每张灰度图可达约 1MB, 全缓存会累积到
-# GB 级, 故用 LRU 封顶: 循环广播是顺序访问, 只需保留最近若干帧即可高命中复用。
-_DATA_CACHE_LIMIT = 256
 
 
 _SELECTION_SPLIT = re.compile(r"[,，\n]+")
@@ -79,10 +74,10 @@ class Sender:
         # 每帧 QR 图在首次 next_image 需要时才编码, 之后缓存复用。
         # 编码开销分摊到后台广播线程, 主线程 (UI) 永不阻塞。
         self._meta_img = None
-        # index -> 已渲染的 QR 图; LRU 封顶, 上限至少覆盖单次合成用到的一屏格子,
-        # 避免同一帧合成过程中缓存自我淘汰。
-        self._data_cache = OrderedDict()
-        self._data_cache_limit = max(_DATA_CACHE_LIMIT, self.grid * self.grid)
+        # index -> 已渲染的 QR PNG 字节 (每帧约几 KB)。缓存 PNG 而非解码后的 PIL 图:
+        # PIL 图 scale=6 时每张约 640KB, 几千帧会到 GB 级; PNG 只 2-3KB, 全量缓存也才
+        # MB 级, 故不设上限 -> 大文件循环广播每帧只需 ~2ms 解码, 不再反复重编 (~35ms)。
+        self._data_png = {}
 
         self._pos = self.start_index - 1  # 当前在 data 帧序列中的位置
         self._resend_indices = None
@@ -101,17 +96,12 @@ class Sender:
         return self._meta_img
 
     def _data_image(self, idx: int) -> Image.Image:
-        img = self._data_cache.get(idx)
-        if img is not None:
-            self._data_cache.move_to_end(idx)  # 命中 -> 标记为最近使用
-            return img
-        frame = P.build_data(self.tid, idx, self.chunks[idx])
-        img = P.encode_qr_img(frame, self.error, self.scale)
-        self._data_cache[idx] = img
-        # 超过上限时淘汰最久未用帧, 封顶稳态内存 (代价是少量重渲染)。
-        while len(self._data_cache) > self._data_cache_limit:
-            self._data_cache.popitem(last=False)
-        return img
+        png = self._data_png.get(idx)
+        if png is None:
+            frame = P.build_data(self.tid, idx, self.chunks[idx])
+            png = P.encode_qr_png(frame, self.error, self.scale)
+            self._data_png[idx] = png  # 只缓存 PNG 字节 (~2.4KB), 全量可容
+        return P.png_to_image(png)     # 解码约 2ms, 远快于重新编码 (~35ms+)
 
     @property
     def is_resending(self) -> bool:

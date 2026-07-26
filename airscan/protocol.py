@@ -113,14 +113,30 @@ def sha1_bytes(data: bytes) -> bytes:
 
 
 # --- QR 编 / 解码 (加扰) ---
-def encode_qr_img(frame: bytes, error: str = "m", scale: int = 6,
-                  border: int = 3) -> Image.Image:
+# 固定掩码, 跳过 segno 默认的 8 种掩码评估 (占编码耗时约 70%)。payload 已被 XOR
+# 加扰成伪随机分布, 掩码优选本无意义; 掩码值写在 QR 格式信息里, 解码端自动识别,
+# 不影响可解码性。实测单帧 segno 编码 133ms -> 35ms (快约 3.8 倍)。
+_QR_MASK = 1
+
+
+def encode_qr_png(frame: bytes, error: str = "m", scale: int = 6,
+                  border: int = 3) -> bytes:
+    """把一帧编码为 QR 的 PNG 字节 (约几 KB, 适合大量缓存)。"""
     scrambled = _scramble(frame)
-    qr = segno.make(scrambled, error=error, encoding="iso-8859-1")
+    qr = segno.make(scrambled, error=error, encoding="iso-8859-1", mask=_QR_MASK)
     buf = io.BytesIO()
     qr.save(buf, kind="png", scale=scale, border=border)
-    buf.seek(0)
-    return Image.open(buf).convert("L")
+    return buf.getvalue()
+
+
+def png_to_image(png: bytes) -> Image.Image:
+    """把 PNG 字节解码为灰度 PIL 图 (约 2ms)。"""
+    return Image.open(io.BytesIO(png)).convert("L")
+
+
+def encode_qr_img(frame: bytes, error: str = "m", scale: int = 6,
+                  border: int = 3) -> Image.Image:
+    return png_to_image(encode_qr_png(frame, error, scale, border))
 
 
 def decode_qr_all(img: Image.Image) -> list:

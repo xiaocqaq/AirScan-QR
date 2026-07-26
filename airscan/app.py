@@ -178,6 +178,7 @@ class Api:
         self.fps = 8
         self._picked_file = None
         self._send_start_index = 1
+        self._send_grid = 1  # 当前宫格设置; 剪贴板热切换沿用上次选择
         self.receiver = None
         self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
@@ -204,10 +205,11 @@ class Api:
             if not clipboard_text:
                 return {"error": "请先输入文本、选择文件或复制文本"}
             src = ("text", clipboard_text)
-        return self._replace_send_source(src, err, fps, start_index)
+        return self._replace_send_source(src, err, fps, start_index, grid=grid)
 
     def _replace_send_source(self, src, err, fps, start_index=1,
-                             monitor_clipboard=True, from_clipboard=False):
+                             monitor_clipboard=True, from_clipboard=False,
+                             grid=None):
         with self._send_lock:
             # 剪贴板触发的热切换: 拿到锁后复查开关 —— 等锁期间用户可能已手动
             # 暂停 (pause_send 会关闭监听), 此时放弃切换, 避免暂停后又自动开播。
@@ -225,15 +227,18 @@ class Api:
             self._send_error_level = err
             self._active_text = src[1] if src[0] == "text" else None
             self._send_start_index = max(1, int(start_index))
+            # grid 为 None 表示沿用当前设置 (剪贴板热切换): 复用上次的宫格数。
+            if grid is not None:
+                self._send_grid = max(1, int(grid))
             self._send_stop.clear()
             self.open_overlay()
             self._send_thread = threading.Thread(
                 target=self._build_and_send,
-                args=(src, err, 1, self._send_start_index),
+                args=(src, err, self._send_grid, self._send_start_index),
                 daemon=True,
             )
             self._send_thread.start()
-        return {"ok": True, "grid": 1}
+        return {"ok": True, "grid": self._send_grid}
 
     def _build_and_send(self, src, err, grid, start_index):
         try:
