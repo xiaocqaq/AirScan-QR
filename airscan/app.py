@@ -206,8 +206,13 @@ class Api:
             src = ("text", clipboard_text)
         return self._replace_send_source(src, err, fps, start_index)
 
-    def _replace_send_source(self, src, err, fps, start_index=1, monitor_clipboard=True):
+    def _replace_send_source(self, src, err, fps, start_index=1,
+                             monitor_clipboard=True, from_clipboard=False):
         with self._send_lock:
+            # 剪贴板触发的热切换: 拿到锁后复查开关 —— 等锁期间用户可能已手动
+            # 暂停 (pause_send 会关闭监听), 此时放弃切换, 避免暂停后又自动开播。
+            if from_clipboard and not self._clipboard_monitor_enabled:
+                return {"ok": False, "skipped": True}
             self._send_stop.set()
             old = self._send_thread
             if old and old.is_alive() and old is not threading.current_thread():
@@ -255,46 +260,48 @@ class Api:
         self.fps = max(1, int(fps))
 
     def pause_send(self):
-        self._send_stop.set()
-        self._clipboard_monitor_enabled = False
-        self._stop_clipboard_watch()
-        self.close_overlay()
-        old = self._send_thread
-        if old and old.is_alive() and old is not threading.current_thread():
-            old.join()
-        return {"ok": True}
+        with self._send_lock:
+            self._send_stop.set()
+            self._clipboard_monitor_enabled = False
+            self._stop_clipboard_watch()
+            self.close_overlay()
+            old = self._send_thread
+            if old and old.is_alive() and old is not threading.current_thread():
+                old.join()
+            return {"ok": True}
 
     def resume_send(self, start_index, resend_spec=None):
-        if not self.sender:
-            return {"error": "当前没有可继续的广播任务"}
-        selection = None
-        if resend_spec is not None:
-            try:
-                selection = (parse_frame_selection(resend_spec, self.sender.total)
-                             if str(resend_spec).strip() else [])
-            except ValueError as error:
-                return {"error": str(error)}
-        requested = max(1, int(start_index))
-        if selection is not None:
-            self.pause_send()
-            count = (self.sender.set_resend_indices(selection) if selection
-                     else (self.sender.clear_resend_indices() or 0))
-        elif requested != self._send_start_index:
-            self._send_start_index = self.sender.seek(requested)
-            count = 0
-        else:
-            count = len(getattr(self.sender, "_resend_indices", ()) or ())
-        if self._send_thread and self._send_thread.is_alive():
+        with self._send_lock:
+            if not self.sender:
+                return {"error": "当前没有可继续的广播任务"}
+            selection = None
+            if resend_spec is not None:
+                try:
+                    selection = (parse_frame_selection(resend_spec, self.sender.total)
+                                 if str(resend_spec).strip() else [])
+                except ValueError as error:
+                    return {"error": str(error)}
+            requested = max(1, int(start_index))
+            if selection is not None:
+                self.pause_send()
+                count = (self.sender.set_resend_indices(selection) if selection
+                         else (self.sender.clear_resend_indices() or 0))
+            elif requested != self._send_start_index:
+                self._send_start_index = self.sender.seek(requested)
+                count = 0
+            else:
+                count = self.sender.resend_count
+            if self._send_thread and self._send_thread.is_alive():
+                return {"ok": True, "start_index": self._send_start_index,
+                        "selection_count": count}
+            self._send_stop.clear()
+            self._clipboard_monitor_enabled = True
+            self.open_overlay()
+            self._start_clipboard_watch()
+            self._send_thread = threading.Thread(target=self._send_loop, daemon=True)
+            self._send_thread.start()
             return {"ok": True, "start_index": self._send_start_index,
                     "selection_count": count}
-        self._send_stop.clear()
-        self._clipboard_monitor_enabled = True
-        self.open_overlay()
-        self._start_clipboard_watch()
-        self._send_thread = threading.Thread(target=self._send_loop, daemon=True)
-        self._send_thread.start()
-        return {"ok": True, "start_index": self._send_start_index,
-                "selection_count": count}
 
     def stop_send(self):
         """兼容旧前端：停止语义降级为暂停，不销毁 Sender。"""
@@ -315,7 +322,7 @@ class Api:
             publish_send_frame(dataurl, status)
             # 补发模式持续循环不自动停; 默认广播达到 max(5遍, 30s) 后自动暂停,
             # 仅结束循环线程, 保留 Sender 与 _pos, 点“继续广播”从暂停处续播。
-            if not s._resend_indices and s.total:
+            if not s.is_resending and s.total:
                 cycles = (s.sent_frames - base_frames) / s.total
                 elapsed = time.monotonic() - start
                 if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
@@ -336,8 +343,11 @@ class Api:
             return
         if text == self._active_text:
             return
-        self._replace_send_source(("text", text), self._send_error_level, self.fps)
-        _js("onClipboardSendStarted()")
+        result = self._replace_send_source(
+            ("text", text), self._send_error_level, self.fps,
+            from_clipboard=True)
+        if result and result.get("ok"):
+            _js("onClipboardSendStarted()")
 
     def _set_clipboard(self, text):
         self._clipboard_watcher.ignore_text(text)
@@ -454,13 +464,21 @@ class Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    # 捕获异常时错误信息最多每 2 秒推送一次前端, 避免每轮 (0.06s) 刷 DOM。
+    RECV_ERROR_THROTTLE = 2.0
+
     def _recv_loop(self):
+        last_error_at = float("-inf")
         while not self._recv_stop.is_set():
             try:
                 img = wincap.grab_window(self.hwnd)
                 self.receiver.feed(img)
+                last_error_at = float("-inf")  # 恢复正常 -> 下次异常立即提示
             except Exception as e:
-                _js(f"document.getElementById('recvStatus').innerText={_js_str('捕获错误: ' + str(e))}")
+                now = time.monotonic()
+                if now - last_error_at >= self.RECV_ERROR_THROTTLE:
+                    last_error_at = now
+                    _js(f"document.getElementById('recvStatus').innerText={_js_str('捕获错误: ' + str(e))}")
             time.sleep(0.06)
 
     def _on_meta(self, task):

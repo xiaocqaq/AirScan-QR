@@ -10,6 +10,7 @@
 import io
 import struct
 import hashlib
+import threading
 
 import segno
 from PIL import Image
@@ -38,17 +39,19 @@ _QR_ONLY = [ZBarSymbol.QRCODE]
 # --- keystream (确定性伪随机, 两端共享, XOR 自逆) ---
 _KS_SEED = b"AirScan-QR/v1"
 _ks_cache = bytearray()
+_ks_lock = threading.Lock()  # 发送/接收线程并发扩展缓存时保护一致性
 
 
 def _keystream(n: int) -> bytes:
     """SHA256 计数器模式生成确定性 keystream, 按需扩展缓存."""
     global _ks_cache
-    if len(_ks_cache) < n:
-        counter = len(_ks_cache) // 32
-        while len(_ks_cache) < n:
-            _ks_cache += hashlib.sha256(_KS_SEED + counter.to_bytes(8, "big")).digest()
-            counter += 1
-    return bytes(_ks_cache[:n])
+    with _ks_lock:
+        if len(_ks_cache) < n:
+            counter = len(_ks_cache) // 32
+            while len(_ks_cache) < n:
+                _ks_cache += hashlib.sha256(_KS_SEED + counter.to_bytes(8, "big")).digest()
+                counter += 1
+        return bytes(_ks_cache[:n])
 
 
 def _scramble(b: bytes) -> bytes:

@@ -25,7 +25,9 @@ def set_clipboard(text: str):
     win32clipboard.OpenClipboard()
     try:
         win32clipboard.EmptyClipboard()
-        win32clipboard.SetClipboardText(text)
+        # 显式 CF_UNICODETEXT: 默认 CF_TEXT 走 ANSI 编码, 在非中文 locale 的
+        # 接收机上中文会乱码, emoji 等 ANSI 之外字符也会丢失。
+        win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
     finally:
         win32clipboard.CloseClipboard()
 

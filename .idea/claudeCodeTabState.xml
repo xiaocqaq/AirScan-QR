@@ -14,7 +14,20 @@
             </TabSessionState>
           </value>
         </entry>
+        <entry key="1">
+          <value>
+            <TabSessionState>
+              <option name="provider" value="claude" />
+              <option name="sessionId" value="9762e7a3-b5b7-41da-9e70-f0a5a423c947" />
+              <option name="cwd" value="D:\code\AirScan-QR-master" />
+              <option name="model" value="claude-fable-5" />
+              <option name="permissionMode" value="bypassPermissions" />
+              <option name="reasoningEffort" value="max" />
+            </TabSessionState>
+          </value>
+        </entry>
       </map>
     </option>
+    <option name="tabCount" value="2" />
   </component>
 </project>

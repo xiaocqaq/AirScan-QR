@@ -9,12 +9,15 @@
 
 区域框选 overlay 在 app.py (需 tkinter), 这里只接收 bbox。
 """
+import hashlib
 import os
 import tempfile
 
 from PIL import ImageGrab
 
 from . import protocol as P
+
+_HASH_BUFFER_SIZE = 1024 * 1024  # 流式校验 SHA-1 的读块大小
 
 
 def format_missing_ranges(indices: list[int]) -> str:
@@ -87,18 +90,34 @@ class Task:
         }
 
     def finalize(self):
-        """flush 并校验 sha1; 返回 (ok, data_or_None)。文本模式一并读回内容。"""
+        """flush 并流式校验 sha1; 返回 (ok, data_or_None)。文本/同步模式才读回内容。
+
+        文件模式下按块读取算哈希, 不把整文件读进内存 (对齐"边收边落盘, 大文件不吃
+        内存"的设计); 文本/同步清单通常很小, 校验通过后一并读回交给 GUI。
+        """
         self._fh.flush()
-        with open(self.path, "rb") as f:
-            data = f.read(self.file_size)
-        ok = P.sha1_bytes(data) == self.sha1
+        ok = self._verify_sha1()
         if ok:
             self._fh.close()
             self.done = True
         if self.is_text or self.is_sync:
             # 文本模式回传解码文本; 同步模式回传清单字节 (gzip), 均由 GUI 后续处理。
-            return ok, data
+            with open(self.path, "rb") as f:
+                return ok, f.read(self.file_size)
         return ok, None  # 文件模式内容留在 self.path, 供 GUI 另存
+
+    def _verify_sha1(self) -> bool:
+        """按块读取临时文件流式计算 SHA-1, 与 meta 里的期望值比对。"""
+        h = hashlib.sha1()
+        remaining = self.file_size
+        with open(self.path, "rb") as f:
+            while remaining > 0:
+                chunk = f.read(min(_HASH_BUFFER_SIZE, remaining))
+                if not chunk:
+                    break  # 文件短于预期 -> 哈希必然不匹配
+                h.update(chunk)
+                remaining -= len(chunk)
+        return h.digest() == self.sha1
 
     def reset_for_retry(self):
         """校验失败后清空接收位图，允许同一任务完整重传。"""
