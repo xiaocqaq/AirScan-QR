@@ -64,6 +64,14 @@ def _js_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
+def _preview_text(text: str, limit: int = 60) -> str:
+    """把剪贴板文本压成单行短预览, 供确认框展示 (换行会撑破弹窗)。"""
+    one_line = " ".join(str(text).split())
+    if len(one_line) <= limit:
+        return one_line
+    return one_line[:limit] + "…"
+
+
 _window = None  # 保持模块级，避免 pywebview introspect 内部 .NET 对象。
 _overlay_window = None
 _tray = None    # 托盘图标 (pystray.Icon)
@@ -193,6 +201,9 @@ class Api:
         self._picked_file = None
         self._send_start_index = 1
         self._send_grid = 1  # 当前宫格设置; 剪贴板热切换沿用上次选择
+        self._send_is_file = False  # 当前广播源是否为文件 (剪贴板抢占需二次确认)
+        self._pending_clipboard_text = None  # 等待用户确认是否顶掉文件广播的文本
+        self._pending_clipboard_seq = 0      # 弹框序号, 区分叠加的确认框
         self.receiver = None
         self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
@@ -241,6 +252,8 @@ class Api:
             self.fps = max(1, int(fps))
             self._send_error_level = err
             self._active_text = src[1] if src[0] == "text" else None
+            self._send_is_file = src[0] == "file"
+            self._pending_clipboard_text = None  # 换源即作废旧的待确认文本
             self._send_start_index = max(1, int(start_index))
             # grid 为 None 表示沿用当前设置 (剪贴板热切换): 复用上次的宫格数。
             if grid is not None:
@@ -284,7 +297,10 @@ class Api:
             self._send_stop.set()
             self._clipboard_monitor_enabled = False
             self._stop_clipboard_watch()
-            self.close_overlay()
+            # 暂停只取消置顶, 不关窗口: 关掉会丢失用户调好的位置和大小, 续播时又得
+            # 重新摆一遍。留着窗口显示最后一帧, 让它不再压住其他窗口即可。
+            _set_overlay_on_top(False)
+            _overlay_js("onOverlayPaused('已暂停广播')")
             old = self._send_thread
             if old and old.is_alive() and old is not threading.current_thread():
                 old.join()
@@ -364,11 +380,46 @@ class Api:
             return
         if text == self._active_text:
             return
+        # 正在广播文件: 不直接顶掉 (大文件重传代价高), 先问用户。文件继续广播,
+        # 用户确认后才切换 —— 见 confirm_clipboard_send / discard_clipboard_send。
+        if self._send_is_file:
+            # 连续复制会叠出多个确认框, 前端把先前那个当"取消"结算。若取消无条件
+            # 清空待确认文本, 就会误删刚存进来的新文本 —— 故带序号, 取消只作废对应那次。
+            self._pending_clipboard_seq += 1
+            self._pending_clipboard_text = text
+            _js(f"onClipboardNeedsConfirm({_js_str(_preview_text(text))}, "
+                f"{self._pending_clipboard_seq})")
+            return
         result = self._replace_send_source(
             ("text", text), self._send_error_level, self.fps,
             from_clipboard=True)
         if result and result.get("ok"):
             _js("onClipboardSendStarted()")
+
+    def confirm_clipboard_send(self, seq=None):
+        """用户确认: 用待确认的剪贴板文本替换当前 (文件) 广播。"""
+        if seq is not None and int(seq) != self._pending_clipboard_seq:
+            return {"ok": False, "stale": True}  # 已被更新的复制取代
+        text = self._pending_clipboard_text
+        self._pending_clipboard_text = None
+        if not text:
+            return {"ok": False, "error": "没有待确认的剪贴板文本"}
+        result = self._replace_send_source(
+            ("text", text), self._send_error_level, self.fps,
+            from_clipboard=True)
+        if result and result.get("ok"):
+            _js("onClipboardSendStarted()")
+        return result
+
+    def discard_clipboard_send(self, seq=None):
+        """用户取消: 丢弃待确认文本, 文件广播不受影响 (从未中断)。
+
+        seq 只作废对应那一次弹框: 期间可能已有更新的复制在等确认, 不能连它一起清掉。
+        """
+        if seq is not None and int(seq) != self._pending_clipboard_seq:
+            return {"ok": True, "stale": True}
+        self._pending_clipboard_text = None
+        return {"ok": True}
 
     def _set_clipboard(self, text):
         self._clipboard_watcher.ignore_text(text)

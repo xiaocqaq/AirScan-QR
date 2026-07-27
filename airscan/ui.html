@@ -210,6 +210,24 @@
       </div>
     </div>
   </div>
+  <div class="modal-backdrop" id="syncResultModal" role="dialog" aria-modal="true"
+    aria-labelledby="syncResultTitle" onclick="onSyncResultBackdrop(event)">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title" id="syncResultTitle">同步结果</div>
+        <button class="modal-close" onclick="closeSyncResult()" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="sync-result-banner" id="syncResultBanner"></div>
+        <div class="sync-result-stats" id="syncResultStats"></div>
+        <div class="sync-result-detail" id="syncResultDetail"></div>
+        <div class="modal-actions">
+          <button class="btn btn-gray" onclick="openSyncTarget()">打开目标目录</button>
+          <button class="btn btn-primary" onclick="closeSyncResult()">好</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <script src="ui.js"></script>
 </body>
 </html>

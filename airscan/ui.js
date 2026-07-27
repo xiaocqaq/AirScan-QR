@@ -183,6 +183,17 @@ function onClipboardSendStarted() {
   document.getElementById('btnPauseSend').disabled = false;
   document.getElementById('sendStatus').innerText = '检测到新剪贴板文本，重新广播中...';
 }
+/* 广播文件时检测到新剪贴板文本: 后端不会自动顶掉文件广播, 先问用户。
+   期间文件广播照常进行, 确认后才切换, 取消则丢弃这段文本。 */
+async function onClipboardNeedsConfirm(preview, seq) {
+  const ok = await confirmDialog(
+    '检测到新复制的文本：\n' + preview
+    + '\n\n当前正在广播文件。要改为广播这段文本吗？\n（取消则继续广播文件，不中断）');
+  // 带 seq: 期间若又复制了新文本, 这次弹框已过期, 后端会忽略以免误删新的待确认文本。
+  const res = ok ? await api('confirm_clipboard_send', seq)
+                 : await api('discard_clipboard_send', seq);
+  if (!ok && !(res && res.stale)) toast('已忽略剪贴板文本，继续广播文件');
+}
 function onSendError(message) {
   toast(message);
   window._sending = false;
@@ -365,6 +376,13 @@ function onMissingBackdrop(event) {
 /* --- 应用内确认框 (替代原生 confirm, 避免 WebView2 带来的 "127.0.0.1 显示" 前缀) --- */
 window._confirmResolve = null;
 function confirmDialog(text) {
+  // 已有确认框未处理: 先把旧的当取消结算, 否则它的 await 永远挂住 (连续复制会
+  // 反复触发确认), 新内容顶替展示。
+  if (window._confirmResolve) {
+    const stale = window._confirmResolve;
+    window._confirmResolve = null;
+    stale(false);
+  }
   document.getElementById('confirmText').innerText = text;
   document.getElementById('confirmModal').classList.add('show');
   document.getElementById('confirmOk').focus();
@@ -513,12 +531,51 @@ async function syncApply() {
       `同步完成 · 应用 ${result.applied} 个 · 删除 ${result.deleted} 个 · 校正 ${result.corrected} 个时间戳`;
     document.getElementById('syncStatus').innerText = '同步完成，变动文件已落到目标仓库';
   } else {
-    const detail = (result.mismatches || []).slice(0, 5)
-      .map(m => `${m.path}(${m.reason})`).join('、');
-    status.innerText =
-      `已应用但仍有 ${result.mismatches.length} 处不一致：${detail}${result.mismatches.length > 5 ? ' …' : ''}`;
-    document.getElementById('syncStatus').innerText = '同步后仍有差异，请检查上方列表';
+    status.innerText = `已应用但仍有 ${(result.mismatches || []).length} 处不一致`;
+    document.getElementById('syncStatus').innerText = '同步后仍有差异，请查看同步结果';
   }
+  showSyncResult(result, target);
+}
+/* 应用同步后弹结果框: 原先只在按钮旁写一行小字, 容易被忽略, 而这一步会覆盖/移除
+   目标仓库文件, 结果必须让人看清。 */
+const SYNC_MISMATCH_REASONS = {
+  missing: '缺失', extra: '多余', size: '大小不符', mtime: '时间戳不符',
+};
+function showSyncResult(result, target) {
+  const ok = !!result.ok_flag;
+  const mismatches = result.mismatches || [];
+  const banner = document.getElementById('syncResultBanner');
+  banner.innerText = ok ? '同步完成 · 已与宿主机一致'
+    : `同步已应用，但仍有 ${mismatches.length} 处不一致`;
+  banner.className = 'sync-result-banner ' + (ok ? 'ok' : 'warn');
+  document.getElementById('syncResultStats').innerText =
+    [`应用 ${result.applied} 个文件`,
+     `移入备份 ${result.deleted} 个`,
+     `校正 ${result.corrected} 个时间戳`,
+     `目标目录：${target}`].join('\n');
+  const detail = document.getElementById('syncResultDetail');
+  if (ok) {
+    detail.style.display = 'none';
+    detail.innerText = '';
+  } else {
+    detail.style.display = 'block';
+    // 全部列出 (不再截断到 5 条): 容器可滚动, 排查差异时需要完整清单。
+    detail.innerText = mismatches
+      .map(m => `${SYNC_MISMATCH_REASONS[m.reason] || m.reason}  ${m.path}`)
+      .join('\n');
+  }
+  window._syncResultTarget = target;
+  document.getElementById('syncResultModal').classList.add('show');
+}
+function closeSyncResult() {
+  document.getElementById('syncResultModal').classList.remove('show');
+}
+function onSyncResultBackdrop(event) {
+  if (event.target.id === 'syncResultModal') closeSyncResult();
+}
+async function openSyncTarget() {
+  // 复用 open_file: 后端走 os.startfile, 对目录同样是"用资源管理器打开"。
+  if (window._syncResultTarget) await api('open_file', window._syncResultTarget);
 }
 function onSyncError(message) {
   toast(message);
@@ -532,5 +589,6 @@ document.getElementById('inputText').addEventListener('keydown', event => {
 window.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   closeMissing();
+  closeSyncResult();
   if (window._confirmResolve) closeConfirm(false);
 });

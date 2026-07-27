@@ -306,7 +306,20 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
 .missing-meta { margin-bottom: 10px; color: var(--ink2); font-size: 13px; }
 .missing-ranges { max-height: 220px; overflow: auto; padding: 14px; border: 1px solid var(--card-brd); border-radius: 10px; background: var(--field); color: var(--ink); font: 13px/1.65 "Consolas", monospace; white-space: pre-wrap; word-break: break-word; user-select: text; }
 .modal-actions { justify-content: flex-end; margin-top: 14px; }
-.confirm-text { color: var(--ink); font-size: 14px; line-height: 1.6; }
+/* pre-line: 确认文案用 \n 分段 (剪贴板抢占提示有多行), 需保留换行。 */
+.confirm-text { color: var(--ink); font-size: 14px; line-height: 1.6; white-space: pre-line; word-break: break-word; }
+
+/* 同步结果弹窗: 成功/有差异用整条横幅区分, 不再只靠一行小字。 */
+.sync-result-banner { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--card-brd); border-radius: 10px; font-size: 14px; font-weight: 700; }
+.sync-result-banner.ok { border-color: #2f7d55; background: rgba(47, 125, 85, .14); color: #4ade80; }
+.sync-result-banner.warn { border-color: #9a6a1f; background: rgba(154, 106, 31, .14); color: #fbbf24; }
+.sync-result-stats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.sync-result-stat { flex: 1 1 90px; padding: 10px 12px; border: 1px solid var(--card-brd); border-radius: 10px; background: var(--field); }
+.sync-result-stat b { display: block; color: var(--ink); font-size: 18px; }
+.sync-result-stat span { color: var(--ink2); font-size: 12px; }
+.sync-result-detail { max-height: 200px; margin-top: 12px; overflow: auto; color: var(--ink2); font: 13px/1.7 "Consolas", monospace; white-space: pre-wrap; word-break: break-word; user-select: text; scrollbar-width: none; }
+.sync-result-detail::-webkit-scrollbar { width: 0; height: 0; }
+.sync-result-detail:empty { display: none; }
 
 @media (max-width: 700px) {
   .topbar, .content { padding-inline: 16px; }
