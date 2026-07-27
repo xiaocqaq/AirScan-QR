@@ -84,6 +84,20 @@ def _overlay_js(code: str):
         pass
 
 
+def _set_overlay_on_top(on_top: bool):
+    """切换悬浮窗置顶。二维码停止滚动 (暂停/自动暂停) 时取消置顶, 免得静止画面
+    一直压在其他窗口上方挡视线; 恢复广播时再置顶, 保证接收端能持续抓到画面。
+
+    接收端用 PrintWindow 抓窗口内容, 被遮挡也能抓到, 故取消置顶不影响接收。
+    """
+    if _overlay_window is None:
+        return
+    try:
+        _overlay_window.on_top = bool(on_top)
+    except Exception:
+        pass
+
+
 def _on_sync_drop(event):
     """云端第 ④ 步拖放区: 从拖入项取真实磁盘路径, 落成 applied 来源。
 
@@ -183,6 +197,7 @@ class Api:
         self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
         self._recv_thread = None
+        self._progress_pushed_at = float("-inf")  # 上次推送进度的时刻 (节流用)
 
     def pick_file(self):
         res = _window.create_file_dialog(webview.OPEN_DIALOG)
@@ -312,9 +327,9 @@ class Api:
         """兼容旧前端：停止语义降级为暂停，不销毁 Sender。"""
         return self.pause_send()
 
-    # 默认展示阈值: 循环到 max(5 遍, 30 秒) 取较长者后自动暂停 (非停止, 保留任务)。
+    # 默认展示阈值: 循环到 max(5 遍, 15 秒) 取较长者后自动暂停 (非停止, 保留任务)。
     AUTO_STOP_CYCLES = 5
-    AUTO_STOP_SECONDS = 30.0
+    AUTO_STOP_SECONDS = 15.0
 
     def _send_loop(self):
         start = time.monotonic()
@@ -332,6 +347,7 @@ class Api:
                 elapsed = time.monotonic() - start
                 if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
                     self._send_stop.set()
+                    _set_overlay_on_top(False)  # 画面静止 -> 让开, 不再压住其他窗口
                     _overlay_js("onOverlayPaused('已自动暂停广播')")
                     _js(f"onSendAutoStopped({int(cycles)})")
                     break
@@ -363,6 +379,8 @@ class Api:
         if _overlay_window is not None:
             try:
                 _overlay_window.show()
+                # 复用已有窗口: 上次暂停时取消过置顶, 这里恢复。
+                _set_overlay_on_top(True)
                 return {"ok": True}
             except Exception:
                 _overlay_window = None
@@ -472,24 +490,76 @@ class Api:
     # 捕获异常时错误信息最多每 2 秒推送一次前端, 避免每轮 (0.06s) 刷 DOM。
     RECV_ERROR_THROTTLE = 2.0
 
+    # --- 轮询节奏 (自适应退避) ---
+    # 一轮 = 抓窗口 + 解码, 是接收端唯一的 CPU 热点。发送端默认 8fps (每帧停留
+    # 125ms), 固定 60ms 轮询意味着约一半的抓取+解码在重复解同一画面, 纯烧 CPU。
+    RECV_INTERVAL_MIN = 0.06
+    # 全空闲上限 (无任务 / 任务已收满)。此时几乎不占 CPU, 而新一轮传输最迟半秒内
+    # 就能被发现 (meta 帧一命中就回到快轮询), 延迟无感。
+    RECV_INTERVAL_MAX = 0.5
+    # 任务进行中的退避上限。传输尾声时发送端在循环重播已收到的帧, feed 会长期返回 0,
+    # 若退到 0.5s 就会漏掉大部分画面 —— 发送端每帧只停留 1/fps 秒 (8fps 时 125ms),
+    # 补齐最后几个缺失帧会慢得离谱。故未收满时最多退到 0.1s, 仍快于帧停留时间。
+    RECV_INTERVAL_ACTIVE_MAX = 0.1
+    RECV_BACKOFF_FACTOR = 1.5
+    # 连续这么多轮没收到新帧才开始退避。广播中即使轮询快于发送帧率, 每隔一两轮总会
+    # 撞上新帧, 故正常传输时空转数攒不到阈值, 不会误退避导致丢帧。
+    RECV_IDLE_GRACE = 8
+
+    def _recv_interval_ceiling(self) -> float:
+        """当前允许的退避上限: 有未收满的任务时压低, 避免漏帧拖慢补帧。"""
+        task = self.receiver.task if self.receiver else None
+        if task is not None and not task.done:
+            return self.RECV_INTERVAL_ACTIVE_MAX
+        return self.RECV_INTERVAL_MAX
+
+    def _next_recv_interval(self, interval: float, new_frames: int,
+                            idle_rounds: int):
+        """返回下一轮的 (间隔, 空转轮数)。收到新帧立刻回到最快节奏。"""
+        if new_frames:
+            return self.RECV_INTERVAL_MIN, 0
+        idle_rounds += 1
+        if idle_rounds < self.RECV_IDLE_GRACE:
+            return interval, idle_rounds
+        ceiling = self._recv_interval_ceiling()
+        # 上限可能随任务状态回落 (新任务开始), 故用 min 夹住当前值而非只做放大。
+        return (min(ceiling, max(interval, interval * self.RECV_BACKOFF_FACTOR)),
+                idle_rounds)
+
     def _recv_loop(self):
         last_error_at = float("-inf")
+        interval = self.RECV_INTERVAL_MIN
+        idle_rounds = 0
         while not self._recv_stop.is_set():
             try:
                 img = wincap.grab_window(self.hwnd)
-                self.receiver.feed(img)
+                new_frames = self.receiver.feed(img)
                 last_error_at = float("-inf")  # 恢复正常 -> 下次异常立即提示
+                interval, idle_rounds = self._next_recv_interval(
+                    interval, new_frames, idle_rounds)
             except Exception as e:
                 now = time.monotonic()
                 if now - last_error_at >= self.RECV_ERROR_THROTTLE:
                     last_error_at = now
                     _js(f"document.getElementById('recvStatus').innerText={_js_str('捕获错误: ' + str(e))}")
-            time.sleep(0.06)
+                # 抓取失败 (窗口最小化/已关闭) 时同样退避, 否则会全速空转报错。
+                interval, idle_rounds = self._next_recv_interval(
+                    interval, 0, idle_rounds)
+            self._recv_stop.wait(interval)
 
     def _on_meta(self, task):
         _js(f"onMeta({_js_str(task.name)}, {task.total}, {str(task.is_text).lower()})")
 
+    # 进度最多每 150ms 推一次前端。每收一帧就 evaluate_js 刷 DOM 在密集宫格下会
+    # 高频跨 WebView2 桥 (2×2 一轮最多 4 次), 低配机上明显拖慢接收循环。
+    PROGRESS_THROTTLE = 0.15
+
     def _on_progress(self, got, total):
+        # 收满必须放行, 否则进度条会停在最后一次节流值上。
+        now = time.monotonic()
+        if got < total and now - self._progress_pushed_at < self.PROGRESS_THROTTLE:
+            return
+        self._progress_pushed_at = now
         _js(f"onProgress({got}, {total})")
 
     def _on_complete(self, ok, task, text):

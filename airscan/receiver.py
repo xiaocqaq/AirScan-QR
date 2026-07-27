@@ -10,6 +10,7 @@
 区域框选 overlay 在 app.py (需 tkinter), 这里只接收 bbox。
 """
 import hashlib
+import math
 import os
 import tempfile
 
@@ -142,12 +143,69 @@ class Task:
 class Receiver:
     """管理捕获与当前任务; GUI 定时调用 poll(bbox) 驱动。"""
 
+    # 解码前把画面等比缩小: ZBar 耗时随像素数急剧上升 (同一 2×2 宫格画面 2100px 约
+    # 500ms, 800px 约 20ms), 低配机上高分辨率解码就是卡顿主因。QR 每模块 2-3 像素即
+    # 可识别, 捕获图往往远超所需。
+    #
+    # 关键约束: 宫格越密每格模块越小, 缩太狠会丢帧 (实测 3×3 缩到 900px 只解出 3/9)。
+    # 且"部分解出"不能当失败信号, 否则会永久卡在丢帧档位 —— 故不用"从最省档起、失败
+    # 再升"的阶梯, 而是从对 1×1~3×3 都安全的 SAFE_START 起步, 再按实际解出的 QR 数
+    # 反推宫格数、收敛到该宫格的安全下限。
+    DECODE_SAFE_START = 1100
+    # 每格至少需要的像素 (实测下限约 370, 取 380 留余量)。
+    DECODE_PX_PER_CELL = 380
+    # 任何宫格都不缩到这个长边以下: 再小收益已微 (20ms 内), 风险却上升。
+    DECODE_MIN_SIDE = 800
+    # 连续解空这么多轮才放宽一档。容忍发送端刷新间隙、窗口重绘等偶发空帧, 避免画面
+    # 正常却因一两次空转就退化。
+    DECODE_MISS_LIMIT = 5
+    # 空转时逐档放宽 (而非直接跳原分辨率): 发送端暂停/无画面时本就解不出, 若立刻升到
+    # 原分辨率, 空闲状态反而占用最多 CPU。0 = 原分辨率, 兜底保证不会因缩放收不到。
+    DECODE_RELAX_LADDER = (1400, 1800, 0)
+
     def __init__(self, on_meta=None, on_progress=None, on_complete=None):
         self.task = None
         self.on_meta = on_meta            # (Task) -> None
         self.on_progress = on_progress    # (got, total) -> None
         self.on_complete = on_complete    # (ok, task, text_or_None) -> None
         self._last_done_tid = None        # 防止已完成任务重复触发
+        self.decode_max_side = self.DECODE_SAFE_START  # 0 = 原分辨率
+        self._miss_streak = 0             # 连续解空的轮数
+        self._max_found = 0               # 本任务内单帧解出过的最多 QR 数
+
+    def reset_decode_scale(self):
+        """回到安全起点。发送端换任务时宫格可能变密, 必须重新探测。"""
+        self.decode_max_side = self.DECODE_SAFE_START
+        self._miss_streak = 0
+        self._max_found = 0
+
+    def _on_decode_result(self, found: int):
+        """按解码结果调整降采样上限。
+
+        用"本任务见过的最多 QR 数"反推宫格边长 (ceil(sqrt(N))), 据此收敛到该宫格的
+        安全长边。只随 _max_found 单调放宽, 不按单帧结果回缩 —— 否则一旦缩到某档后
+        只解出部分 QR (如 3×3 在 800px 仅出 3/9), 会据此误判成更小的宫格而永久卡在
+        丢帧档位。宫格变化必然伴随新任务 (新 tid), 由 reset_decode_scale 重新探测。
+        """
+        if not found:
+            self._miss_streak += 1
+            if self._miss_streak < self.DECODE_MISS_LIMIT:
+                return
+            self._miss_streak = 0
+            for step in self.DECODE_RELAX_LADDER:
+                if self.decode_max_side and (step == 0 or step > self.decode_max_side):
+                    self.decode_max_side = step
+                    break
+            return
+        self._miss_streak = 0
+        if found <= self._max_found:
+            return
+        self._max_found = found
+        if self.decode_max_side == 0:
+            return  # 已在原分辨率, 不回缩 (兜底档位保持稳定)
+        cells_per_side = math.isqrt(found - 1) + 1  # ceil(sqrt(found))
+        self.decode_max_side = max(self.DECODE_MIN_SIDE,
+                                   cells_per_side * self.DECODE_PX_PER_CELL)
 
     def grab(self, bbox):
         return ImageGrab.grab(bbox=bbox)
@@ -157,7 +215,9 @@ class Receiver:
         if img is None:
             return 0
         new = 0
-        for raw in P.decode_qr_all(img):
+        raws = P.decode_qr_all(img, max_side=self.decode_max_side)
+        self._on_decode_result(len(raws))
+        for raw in raws:
             f = P.parse_frame(raw)
             if not f:
                 continue
@@ -178,6 +238,7 @@ class Receiver:
             if self.task and not self.task.done:
                 self.task.cleanup()
             self.task = Task(f)
+            self.reset_decode_scale()  # 新任务宫格可能变密, 重新探测安全档位
             if self.on_meta:
                 self.on_meta(self.task)
         elif tid == self._last_done_tid:

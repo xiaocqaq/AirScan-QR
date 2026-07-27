@@ -139,9 +139,31 @@ def encode_qr_img(frame: bytes, error: str = "m", scale: int = 6,
     return png_to_image(encode_qr_png(frame, error, scale, border))
 
 
-def decode_qr_all(img: Image.Image) -> list:
-    """解出画面中所有 QR, 返回还原后的原始帧字节列表(无效的跳过)."""
+def downscale_for_decode(img: Image.Image, max_side: int) -> Image.Image:
+    """长边超过 max_side 时等比缩小, 供解码用。
+
+    ZBar 解码耗时随像素数急剧上升 (2100px 约 500ms, 800px 约 20ms), 而 QR 只需
+    每个模块 2-3 像素即可识别。捕获图往往远超所需分辨率, 先缩小再解码可大幅降低
+    CPU 占用。缩放用 BILINEAR: NEAREST 会让模块边界锯齿化导致误码, LANCZOS 过慢。
+    """
+    if max_side <= 0:
+        return img
+    side = max(img.size)
+    if side <= max_side:
+        return img
+    ratio = max_side / side
+    size = (max(1, int(img.width * ratio)), max(1, int(img.height * ratio)))
+    return img.resize(size, Image.BILINEAR)
+
+
+def decode_qr_all(img: Image.Image, max_side: int = 0) -> list:
+    """解出画面中所有 QR, 返回还原后的原始帧字节列表(无效的跳过).
+
+    max_side > 0 时先把画面等比缩到该长边再解码 (省 CPU); 0 表示原分辨率解码。
+    """
     out = []
+    if max_side:
+        img = downscale_for_decode(img, max_side)
     for r in _zbar_decode(img, symbols=_QR_ONLY):
         try:
             raw = r.data.decode("utf-8").encode("latin-1")

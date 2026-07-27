@@ -7,22 +7,23 @@
           <value>
             <TabSessionState>
               <option name="provider" value="claude" />
-              <option name="sessionId" value="a7886c41-a074-4331-9284-f19bf38636f5" />
+              <option name="sessionId" value="9762e7a3-b5b7-41da-9e70-f0a5a423c947" />
               <option name="cwd" value="D:\code\AirScan-QR-master" />
-              <option name="model" value="claude-opus-4-8[1m]" />
+              <option name="model" value="claude-opus-5" />
               <option name="permissionMode" value="bypassPermissions" />
+              <option name="reasoningEffort" value="high" />
             </TabSessionState>
           </value>
         </entry>
         <entry key="1">
           <value>
             <TabSessionState>
-              <option name="provider" value="claude" />
-              <option name="sessionId" value="9762e7a3-b5b7-41da-9e70-f0a5a423c947" />
+              <option name="provider" value="codex" />
+              <option name="sessionId" value="019f9e5e-8983-7273-ae66-e0252a37f8c7" />
               <option name="cwd" value="D:\code\AirScan-QR-master" />
-              <option name="model" value="claude-fable-5" />
+              <option name="model" value="gpt-5.6-sol" />
               <option name="permissionMode" value="bypassPermissions" />
-              <option name="reasoningEffort" value="max" />
+              <option name="reasoningEffort" value="high" />
             </TabSessionState>
           </value>
         </entry>
