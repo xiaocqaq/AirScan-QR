@@ -1,4 +1,9 @@
-lib.html
+
+ib.html
 /tests/
 /dist/
 /.idea/
+/build-1.6.0/
+/build-staging/
+/dist-1.6.0/
+/dist-staging/
