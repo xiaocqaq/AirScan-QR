@@ -183,6 +183,18 @@ function onClipboardSendStarted() {
   document.getElementById('btnPauseSend').disabled = false;
   document.getElementById('sendStatus').innerText = '检测到新剪贴板文本，重新广播中...';
 }
+async function onClipboardNeedsConfirm(preview, seq) {
+  if (window._confirmResolve) closeConfirm(false);
+  const ok = await confirmDialog(
+    '检测到新复制的文本：\n' + preview
+    + '\n\n当前正在广播文件。要改为广播这段文本吗？'
+    + '\n（取消则继续广播文件，不会中断）');
+  const result = ok ? await api('confirm_clipboard_send', seq)
+                    : await api('discard_clipboard_send', seq);
+  if (!ok && !(result && result.stale)) {
+    toast('已忽略剪贴板文本，继续广播文件');
+  }
+}
 function onSendError(message) {
   toast(message);
   window._sending = false;
@@ -513,12 +525,52 @@ async function syncApply() {
       `同步完成 · 应用 ${result.applied} 个 · 删除 ${result.deleted} 个 · 校正 ${result.corrected} 个时间戳`;
     document.getElementById('syncStatus').innerText = '同步完成，变动文件已落到目标仓库';
   } else {
-    const detail = (result.mismatches || []).slice(0, 5)
-      .map(m => `${m.path}(${m.reason})`).join('、');
-    status.innerText =
-      `已应用但仍有 ${result.mismatches.length} 处不一致：${detail}${result.mismatches.length > 5 ? ' …' : ''}`;
-    document.getElementById('syncStatus').innerText = '同步后仍有差异，请检查上方列表';
+    status.innerText = `已应用但仍有 ${(result.mismatches || []).length} 处不一致`;
+    document.getElementById('syncStatus').innerText = '同步后仍有差异，请检查同步结果';
   }
+  showSyncResult(result, target);
+}
+
+const SYNC_MISMATCH_REASONS = {
+  missing: '缺失',
+  extra: '多余',
+  size: '大小不符',
+  mtime: '时间戳不符',
+};
+function showSyncResult(result, target) {
+  const ok = !!result.ok_flag;
+  const mismatches = result.mismatches || [];
+  const banner = document.getElementById('syncResultBanner');
+  banner.innerText = ok ? '同步完成 · 已与目标仓库一致'
+    : `同步已应用，但仍有 ${mismatches.length} 处不一致`;
+  banner.className = 'sync-result-banner ' + (ok ? 'ok' : 'warn');
+  document.getElementById('syncResultStats').innerText =
+    [`应用 ${result.applied} 个文件`,
+     `移入备份 ${result.deleted} 个`,
+     `校正 ${result.corrected} 个时间戳`,
+     `目标目录：${target}`].join('\n');
+  const detail = document.getElementById('syncResultDetail');
+  if (ok) {
+    detail.style.display = 'none';
+    detail.innerText = '';
+  } else {
+    detail.style.display = 'block';
+    detail.innerText = mismatches
+      .map(m => `${SYNC_MISMATCH_REASONS[m.reason] || m.reason}  ${m.path}`)
+      .join('\n');
+  }
+  window._syncResultTarget = target;
+  document.getElementById('syncResultModal').classList.add('show');
+  document.querySelector('#syncResultModal .modal-close').focus();
+}
+function closeSyncResult() {
+  document.getElementById('syncResultModal').classList.remove('show');
+}
+function onSyncResultBackdrop(event) {
+  if (event.target.id === 'syncResultModal') closeSyncResult();
+}
+async function openSyncTarget() {
+  if (window._syncResultTarget) await api('open_file', window._syncResultTarget);
 }
 function onSyncError(message) {
   toast(message);
@@ -532,5 +584,6 @@ document.getElementById('inputText').addEventListener('keydown', event => {
 window.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   closeMissing();
+  closeSyncResult();
   if (window._confirmResolve) closeConfirm(false);
 });

@@ -64,6 +64,14 @@ def _js_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
+def _preview_text(text: str, limit: int = 60) -> str:
+    """把剪贴板文本压成单行短预览，供确认框展示。"""
+    one_line = " ".join(str(text).split())
+    if len(one_line) <= limit:
+        return one_line
+    return one_line[:limit] + "…"
+
+
 _window = None  # 保持模块级，避免 pywebview introspect 内部 .NET 对象。
 _overlay_window = None
 _tray = None    # 托盘图标 (pystray.Icon)
@@ -80,6 +88,15 @@ def _overlay_js(code: str):
         return
     try:
         _overlay_window.evaluate_js(code)
+    except Exception:
+        pass
+
+
+def _set_overlay_on_top(on_top: bool):
+    if _overlay_window is None:
+        return
+    try:
+        _overlay_window.on_top = bool(on_top)
     except Exception:
         pass
 
@@ -179,6 +196,9 @@ class Api:
         self._picked_file = None
         self._send_start_index = 1
         self._send_grid = 1  # 当前宫格设置; 剪贴板热切换沿用上次选择
+        self._send_is_file = False
+        self._pending_clipboard_text = None
+        self._pending_clipboard_seq = 0
         self.receiver = None
         self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
@@ -226,6 +246,8 @@ class Api:
             self.fps = max(1, int(fps))
             self._send_error_level = err
             self._active_text = src[1] if src[0] == "text" else None
+            self._send_is_file = src[0] == "file"
+            self._pending_clipboard_text = None
             self._send_start_index = max(1, int(start_index))
             # grid 为 None 表示沿用当前设置 (剪贴板热切换): 复用上次的宫格数。
             if grid is not None:
@@ -269,7 +291,8 @@ class Api:
             self._send_stop.set()
             self._clipboard_monitor_enabled = False
             self._stop_clipboard_watch()
-            self.close_overlay()
+            _set_overlay_on_top(False)
+            _overlay_js("onOverlayPaused('已暂停广播')")
             old = self._send_thread
             if old and old.is_alive() and old is not threading.current_thread():
                 old.join()
@@ -332,6 +355,7 @@ class Api:
                 elapsed = time.monotonic() - start
                 if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
                     self._send_stop.set()
+                    _set_overlay_on_top(False)
                     _overlay_js("onOverlayPaused('已自动暂停广播')")
                     _js(f"onSendAutoStopped({int(cycles)})")
                     break
@@ -348,11 +372,37 @@ class Api:
             return
         if text == self._active_text:
             return
+        if self._send_is_file:
+            self._pending_clipboard_seq += 1
+            self._pending_clipboard_text = text
+            _js(f"onClipboardNeedsConfirm({_js_str(_preview_text(text))}, "
+                f"{self._pending_clipboard_seq})")
+            return
         result = self._replace_send_source(
             ("text", text), self._send_error_level, self.fps,
             from_clipboard=True)
         if result and result.get("ok"):
             _js("onClipboardSendStarted()")
+
+    def confirm_clipboard_send(self, seq=None):
+        if seq is not None and int(seq) != self._pending_clipboard_seq:
+            return {"ok": True, "stale": True}
+        text = self._pending_clipboard_text
+        self._pending_clipboard_text = None
+        if not text:
+            return {"ok": False, "error": "没有待确认的剪贴板文本"}
+        result = self._replace_send_source(
+            ("text", text), self._send_error_level, self.fps,
+            from_clipboard=True)
+        if result and result.get("ok"):
+            _js("onClipboardSendStarted()")
+        return result
+
+    def discard_clipboard_send(self, seq=None):
+        if seq is not None and int(seq) != self._pending_clipboard_seq:
+            return {"ok": True, "stale": True}
+        self._pending_clipboard_text = None
+        return {"ok": True}
 
     def _set_clipboard(self, text):
         self._clipboard_watcher.ignore_text(text)
@@ -363,6 +413,7 @@ class Api:
         if _overlay_window is not None:
             try:
                 _overlay_window.show()
+                _set_overlay_on_top(True)
                 return {"ok": True}
             except Exception:
                 _overlay_window = None

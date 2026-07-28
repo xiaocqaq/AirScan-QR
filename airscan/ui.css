@@ -284,7 +284,8 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
 .msg-title { margin: 10px 2px 6px; color: var(--ink2); font-size: 13px; font-weight: 700; }
 .msg-list { display: flex; flex-direction: column; gap: 8px; }
 .msg-item { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--card-brd); border-radius: 12px; background: var(--card); box-shadow: var(--shadow-sm); }
-.msg-text { flex: 1; max-height: 120px; overflow: auto; color: var(--ink); font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text; }
+.msg-text { flex: 1; max-height: 120px; overflow: auto; color: var(--ink); font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text; scrollbar-width: none; -ms-overflow-style: none; }
+.msg-text::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .msg-copy { width: 38px; height: 38px; flex-shrink: 0; border: 1px solid var(--card-brd); border-radius: 9px; background: var(--field); color: var(--ink2); cursor: pointer; }
 .msg-copy:hover { border-color: var(--accent); color: var(--accent); }
 
@@ -306,6 +307,13 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
 .missing-ranges { max-height: 220px; overflow: auto; padding: 14px; border: 1px solid var(--card-brd); border-radius: 10px; background: var(--field); color: var(--ink); font: 13px/1.65 "Consolas", monospace; white-space: pre-wrap; word-break: break-word; user-select: text; }
 .modal-actions { justify-content: flex-end; margin-top: 14px; }
 .confirm-text { color: var(--ink); font-size: 14px; line-height: 1.6; }
+.sync-result-modal { width: min(640px, 100%); }
+.sync-result-banner { margin-bottom: 12px; padding: 12px 14px; border: 1px solid var(--card-brd); border-radius: 10px; font-size: 15px; font-weight: 800; }
+.sync-result-banner.ok { border-color: color-mix(in srgb, var(--ok) 45%, var(--card-brd)); color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, var(--card)); }
+.sync-result-banner.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--card-brd)); color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--card)); }
+.sync-result-stats { padding: 12px 14px; border: 1px solid var(--card-brd); border-radius: 10px; background: var(--field); color: var(--ink2); font: 13px/1.7 "Consolas", monospace; white-space: pre-wrap; word-break: break-word; user-select: text; }
+.sync-result-detail { display: none; max-height: 220px; overflow: auto; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--card-brd); border-radius: 10px; background: var(--field); color: var(--ink); font: 13px/1.7 "Consolas", monospace; white-space: pre-wrap; word-break: break-word; user-select: text; scrollbar-width: none; -ms-overflow-style: none; }
+.sync-result-detail::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 @media (max-width: 700px) {
   .topbar, .content { padding-inline: 16px; }
