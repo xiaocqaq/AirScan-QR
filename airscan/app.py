@@ -74,6 +74,7 @@ def _preview_text(text: str, limit: int = 60) -> str:
 
 _window = None  # 保持模块级，避免 pywebview introspect 内部 .NET 对象。
 _overlay_window = None
+_overlay_minimized = False
 _tray = None    # 托盘图标 (pystray.Icon)
 _really_quit = False  # True 时 closing 事件放行真正退出
 
@@ -85,6 +86,8 @@ def _js(code: str):
 
 def _overlay_js(code: str):
     if _overlay_window is None:
+        return
+    if _overlay_minimized:
         return
     try:
         _overlay_window.evaluate_js(code)
@@ -199,6 +202,7 @@ class Api:
         self._send_is_file = False
         self._pending_clipboard_text = None
         self._pending_clipboard_seq = 0
+        self._clipboard_switch_thread = None
         self.receiver = None
         self.hwnd = None          # 锁定的目标窗口句柄
         self._recv_stop = threading.Event()
@@ -378,6 +382,16 @@ class Api:
             _js(f"onClipboardNeedsConfirm({_js_str(_preview_text(text))}, "
                 f"{self._pending_clipboard_seq})")
             return
+        self._start_clipboard_text_send(text)
+
+    def _start_clipboard_text_send(self, text):
+        worker = threading.Thread(
+            target=self._run_clipboard_text_send, args=(text,), daemon=True)
+        self._clipboard_switch_thread = worker
+        worker.start()
+        return {"ok": True, "queued": True}
+
+    def _run_clipboard_text_send(self, text):
         result = self._replace_send_source(
             ("text", text), self._send_error_level, self.fps,
             from_clipboard=True)
@@ -391,12 +405,7 @@ class Api:
         self._pending_clipboard_text = None
         if not text:
             return {"ok": False, "error": "没有待确认的剪贴板文本"}
-        result = self._replace_send_source(
-            ("text", text), self._send_error_level, self.fps,
-            from_clipboard=True)
-        if result and result.get("ok"):
-            _js("onClipboardSendStarted()")
-        return result
+        return self._start_clipboard_text_send(text)
 
     def discard_clipboard_send(self, seq=None):
         if seq is not None and int(seq) != self._pending_clipboard_seq:
@@ -409,14 +418,17 @@ class Api:
         set_clipboard(text)
 
     def open_overlay(self):
-        global _overlay_window
+        global _overlay_window, _overlay_minimized
         if _overlay_window is not None:
             try:
                 _overlay_window.show()
+                _overlay_minimized = False
                 _set_overlay_on_top(True)
                 return {"ok": True}
             except Exception:
                 _overlay_window = None
+                _overlay_minimized = False
+        _overlay_minimized = False
         _overlay_window = webview.create_window(
             "AirScan-QR 悬浮广播",
             html=OVERLAY_HTML,
@@ -428,19 +440,31 @@ class Api:
             on_top=True,
         )
         try:
+            def on_minimized():
+                global _overlay_minimized
+                _overlay_minimized = True
+
+            def on_restored():
+                global _overlay_minimized
+                _overlay_minimized = False
+
             def on_closing():
-                global _overlay_window
+                global _overlay_window, _overlay_minimized
                 _overlay_window = None
+                _overlay_minimized = False
                 return True
+            _overlay_window.events.minimized += on_minimized
+            _overlay_window.events.restored += on_restored
             _overlay_window.events.closing += on_closing
         except Exception:
             pass
         return {"ok": True}
 
     def close_overlay(self):
-        global _overlay_window
+        global _overlay_window, _overlay_minimized
         overlay = _overlay_window
         _overlay_window = None
+        _overlay_minimized = False
         if overlay is not None:
             try:
                 overlay.destroy()
