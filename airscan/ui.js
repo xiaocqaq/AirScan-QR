@@ -1,7 +1,26 @@
 const GRID_FPS_DEFAULTS = { 1: 8, 2: 5, 3: 3 };
 const HISTORY_ITEM_LIMIT = 5;
+const UI_REFERENCE_WIDTH = 552;
 window._fpsTouched = false;
 window._sendPaused = false;
+
+let uiScaleFrame = 0;
+function syncUiScale() {
+  uiScaleFrame = 0;
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+  const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+  const scale = Math.min(1, viewportWidth / UI_REFERENCE_WIDTH);
+  document.documentElement.style.setProperty('--ui-scale', String(scale));
+  document.body.style.width = `${viewportWidth / scale}px`;
+  document.body.style.height = `${viewportHeight / scale}px`;
+}
+function scheduleUiScale() {
+  if (uiScaleFrame) cancelAnimationFrame(uiScaleFrame);
+  uiScaleFrame = requestAnimationFrame(syncUiScale);
+}
+syncUiScale();
+window.addEventListener('resize', scheduleUiScale, { passive: true });
+
 function api(name, ...args) {
   return window.pywebview.api[name](...args);
 }
@@ -97,7 +116,7 @@ function initTheme() {
 initTheme();
 
 function switchTab(tab) {
-  const tabs = ['send', 'recv', 'sync'];
+  const tabs = ['send', 'recv', 'sync', 'tunnel'];
   tabs.forEach(name => {
     const active = name === tab;
     document.getElementById('tab-' + name).classList.toggle('active', active);
@@ -106,6 +125,9 @@ function switchTab(tab) {
   if (tab === 'recv') {
     refreshWindows();
     loadDownloadDir();
+  } else if (tab === 'tunnel') {
+    refreshGitWindows();
+    refreshGitTunnelStatus();
   }
 }
 async function pickFile() {
@@ -395,6 +417,25 @@ async function copyMissing() {
   await api('copy_text', document.getElementById('missingRanges').innerText);
   toast('缺失序号已复制');
 }
+const WINDOW_TARGET_KEYS = {
+  recv: 'airscan-recv-window-target',
+  git_host: 'airscan-git-window-target',
+};
+function loadWindowTarget(role) {
+  try { return JSON.parse(localStorage.getItem(WINDOW_TARGET_KEYS[role]) || 'null'); }
+  catch (_) { return null; }
+}
+function saveWindowTarget(role, target) {
+  if (target) localStorage.setItem(WINDOW_TARGET_KEYS[role], JSON.stringify(target));
+}
+async function restoreWindowTarget(role, select) {
+  const target = loadWindowTarget(role);
+  if (!target) return false;
+  const result = await api('restore_window_target', role, target);
+  if (!result || !result.ok) return false;
+  select.value = String(result.hwnd);
+  return true;
+}
 async function refreshWindows() {
   const windows = (await api('list_windows')) || [];
   const select = document.getElementById('winSel');
@@ -405,11 +446,16 @@ async function refreshWindows() {
     option.text = `${windowInfo.title} (${windowInfo.w}×${windowInfo.h})`;
     select.appendChild(option);
   });
+  await restoreWindowTarget('recv', select);
+  document.getElementById('btnRecv').disabled = !select.value;
 }
 async function onWinPick() {
   const hwnd = document.getElementById('winSel').value;
   document.getElementById('btnRecv').disabled = !hwnd;
-  if (hwnd) await api('set_window', +hwnd);
+  if (hwnd) {
+    const result = await api('set_window', +hwnd, 'recv');
+    saveWindowTarget('recv', result && result.target);
+  }
 }
 async function loadDownloadDir() {
   document.getElementById('downloadDir').innerText = await api('get_download_dir');
@@ -576,6 +622,119 @@ function onSyncError(message) {
   toast(message);
   document.getElementById('syncStatus').innerText = message;
 }
+
+/* --- Git 隧道 (IDEA fetch / pull / push) --- */
+const GIT_BASE_KEY = 'airscan-git-base-url';
+const GIT_CONTROLS = {
+  host: {
+    startId: 'btnGitHostStart', stopId: 'btnGitHostStop',
+    start: '启动代理', running: '代理运行中', stop: '停止代理',
+  },
+  cloud: {
+    startId: 'btnGitCloudStart', stopId: 'btnGitCloudStop',
+    start: '启动转发', running: '转发运行中', stop: '停止转发',
+  },
+};
+function gitStatus(message) {
+  const el = document.getElementById('gitTunnelStatus');
+  if (el) el.innerText = message;
+}
+function setGitControlState(scope, running, busyAction = '') {
+  const control = GIT_CONTROLS[scope];
+  const start = document.getElementById(control.startId);
+  const stop = document.getElementById(control.stopId);
+  const busy = Boolean(busyAction);
+  start.disabled = busy || running;
+  stop.disabled = busy || !running;
+  start.innerText = busyAction === 'start' ? '启动中...' : (running ? control.running : control.start);
+  stop.innerText = busyAction === 'stop' ? '停止中...' : control.stop;
+}
+async function runGitTunnelAction(scope, action, invoke, successMessage) {
+  setGitControlState(scope, action === 'stop', action);
+  try {
+    const result = await invoke();
+    if (result.error) {
+      toast(result.error);
+      gitStatus(result.error);
+      return;
+    }
+    gitStatus(successMessage);
+  } catch (error) {
+    const message = 'Git 隧道操作失败: ' + (error && error.message ? error.message : error);
+    toast(message);
+    gitStatus(message);
+  } finally {
+    await refreshGitTunnelStatus();
+  }
+}
+async function refreshGitWindows() {
+  const select = document.getElementById('gitHostWindow');
+  if (!select) return;
+  const current = select.value;
+  const wins = await api('list_windows');
+  select.innerHTML = '<option value="">选择云桌面窗口...</option>';
+  wins.forEach(w => {
+    const option = document.createElement('option');
+    option.value = w.hwnd;
+    option.textContent = w.title + ' (' + w.w + '×' + w.h + ')';
+    select.appendChild(option);
+  });
+  if (current) select.value = current;
+  if (!select.value) await restoreWindowTarget('git_host', select);
+}
+async function onGitWindowPick() {
+  const hwnd = document.getElementById('gitHostWindow').value;
+  if (!hwnd) return;
+  const result = await api('set_window', +hwnd, 'git_host');
+  saveWindowTarget('git_host', result && result.target);
+}
+function initGitBaseUrl() {
+  const input = document.getElementById('gitBaseUrl');
+  if (!input) return;
+  const saved = localStorage.getItem(GIT_BASE_KEY);
+  if (saved) input.value = saved;
+}
+async function refreshGitTunnelStatus() {
+  const result = await api('git_tunnel_status');
+  const hostRunning = Boolean(result.host && result.host.running);
+  const cloudRunning = Boolean(result.cloud && result.cloud.running);
+  setGitControlState('host', hostRunning);
+  setGitControlState('cloud', cloudRunning);
+  const host = hostRunning ? '宿主机 ' + (result.host.listen || '运行中') : '宿主机未启动';
+  const capacity = cloudRunning
+    ? ` · 上限 ${result.cloud.max_pages} 页 / ${result.cloud.response_limit_mib} MiB`
+    : '';
+  const cloud = cloudRunning ? '云端 ' + (result.cloud.target || '运行中') + capacity : '云端未启动';
+  gitStatus(host + ' · ' + cloud);
+}
+async function gitStartHost() {
+  const hwnd = document.getElementById('gitHostWindow').value;
+  if (!hwnd) { toast('请先选择云桌面窗口'); return; }
+  await onGitWindowPick();
+  await runGitTunnelAction('host', 'start',
+    () => api('git_tunnel_start_host'),
+    '宿主机代理已启动 · IDEA 使用 127.0.0.1:9999');
+}
+async function gitStopHost() {
+  await runGitTunnelAction('host', 'stop',
+    () => api('git_tunnel_stop_host'), '宿主机代理已停止');
+}
+async function gitStartCloud() {
+  const input = document.getElementById('gitBaseUrl');
+  const baseUrl = input.value.trim();
+  localStorage.setItem(GIT_BASE_KEY, baseUrl);
+  await runGitTunnelAction('cloud', 'start',
+    () => api('git_tunnel_start_cloud', baseUrl),
+    '云端转发已启动 · 等待 IDEA 请求');
+}
+async function gitStopCloud() {
+  await runGitTunnelAction('cloud', 'stop',
+    () => api('git_tunnel_stop_cloud'), '云端转发已停止');
+}
+function onGitTunnelStatus(message) {
+  gitStatus(message);
+}
+initGitBaseUrl();
 document.getElementById('inputText').addEventListener('keydown', event => {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
   event.preventDefault();

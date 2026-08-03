@@ -7,6 +7,7 @@
 }
 
 :root {
+  --ui-scale: 1;
   /* 清爽扁平 (clean flat): 纯色卡片 + 清晰边框 + 柔和阴影, 无毛玻璃 */
   --bg: #f6f7f9;
   --card: #ffffff;
@@ -74,6 +75,8 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transform: scale(var(--ui-scale));
+  transform-origin: top left;
   background: var(--bg);
   color: var(--ink);
   font-family: "微软雅黑", system-ui, -apple-system, "Segoe UI", "Segoe UI Emoji", sans-serif;
@@ -292,7 +295,7 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
 .file-name { cursor: pointer; color: var(--accent); font-weight: 600; }
 .file-name:hover { text-decoration: underline; }
 
-#toast { position: fixed; bottom: 24px; left: 50%; z-index: 2000; padding: 12px 22px; border-radius: 12px; background: var(--ink); color: var(--bg); box-shadow: var(--shadow-lg); opacity: 0; transform: translateX(-50%) translateY(80px); transition: all .28s ease; }
+#toast { position: fixed; bottom: 24px; left: 50%; z-index: 2000; padding: 12px 22px; border-radius: 12px; background: var(--ink); color: var(--bg); box-shadow: var(--shadow-lg); opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(80px); transition: all .28s ease; }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .modal-backdrop { position: fixed; inset: 0; z-index: 1500; display: none; align-items: center; justify-content: center; padding: 24px; background: rgba(20,25,35,.42); }
 .modal-backdrop.show { display: flex; }
@@ -445,6 +448,33 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
   display: none;
 }
 .sync-diff-result.show { display: block; }
+.git-role-icon {
+  width: auto;
+  min-width: 38px;
+  padding: 0 8px;
+  font: 800 11px "Consolas", monospace;
+}
+.git-base-input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--field);
+  color: var(--ink);
+  font: 13px "Consolas", monospace;
+}
+.git-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.git-action-row .btn {
+  width: 100%;
+  min-width: 0;
+  padding-inline: 12px;
+  white-space: nowrap;
+}
 
 /* 窄屏: 两栏堆叠为单列 */
 @media (max-width: 720px) {

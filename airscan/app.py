@@ -4,6 +4,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 from collections import OrderedDict
@@ -16,6 +17,8 @@ from . import protocol as P
 from . import wincap
 from . import foldersync
 from .clipboard import ClipboardWatcher, normalize_clipboard_text, read_clipboard_text
+from .git_tunnel import CloudTunnel, HostTunnel
+from .git_tunnel_protocol import is_clipboard_message
 from .overlay import OVERLAY_HTML
 from .sender import Sender, load_file, load_text, parse_frame_selection
 from .receiver import Receiver
@@ -32,6 +35,41 @@ def _img_to_dataurl(img: Image.Image) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _png_to_dataurl(png: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+class GitQrPageCache:
+    """将 Git QR PNG 缓存在临时文件，避免重复编码和大内存驻留。"""
+
+    def __init__(self, encoder):
+        self.encoder = encoder
+        self._file = tempfile.TemporaryFile(prefix="airscan-git-qr-")
+        self._entries = {}
+
+    def get(self, index, page):
+        entry = self._entries.get(index)
+        if entry is None:
+            png = self.encoder(page)
+            self._file.seek(0, io.SEEK_END)
+            entry = (self._file.tell(), len(png))
+            self._file.write(png)
+            self._entries[index] = entry
+        else:
+            self._file.seek(entry[0])
+            png = self._file.read(entry[1])
+        return _png_to_dataurl(png)
+
+    def close(self):
+        self._file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
 
 
 class ImageDataUrlCache:
@@ -77,6 +115,9 @@ _overlay_window = None
 _overlay_minimized = False
 _tray = None    # 托盘图标 (pystray.Icon)
 _really_quit = False  # True 时 closing 事件放行真正退出
+APP_TITLE = "AirScan-QR"
+GIT_QR_FRAME_SECONDS = 0.4
+GIT_QR_SINGLE_SECONDS = 0.25
 
 
 def _js(code: str):
@@ -156,7 +197,7 @@ def _apply_window_icon():
             return
         # 找到本进程标题为 "AirScan-QR..." 的顶层窗口句柄。
         user32 = windll.user32
-        hwnd = user32.FindWindowW(None, "AirScan-QR · PC → PC")
+        hwnd = user32.FindWindowW(None, APP_TITLE)
         if not hwnd:
             return
         # LR_LOADFROMFILE=0x10, IMAGE_ICON=1
@@ -190,6 +231,7 @@ class Api:
         self._send_stop = threading.Event()
         self._send_thread = None
         self._send_lock = threading.RLock()
+        self._qr_output_lock = threading.Lock()
         self._clipboard_watcher = ClipboardWatcher(self._on_clipboard_text)
         self._clipboard_monitor_enabled = False
         self._send_error_level = "m"
@@ -202,11 +244,18 @@ class Api:
         self._send_is_file = False
         self._pending_clipboard_text = None
         self._pending_clipboard_seq = 0
+        self._clipboard_switch_lock = threading.Lock()
+        self._queued_clipboard_text = None
         self._clipboard_switch_thread = None
         self.receiver = None
         self.hwnd = None          # 锁定的目标窗口句柄
+        self._git_host_hwnd = None
+        self._window_targets = {"recv": None, "git_host": None}
+        self._window_reconnect_after = {"recv": 0.0, "git_host": 0.0}
         self._recv_stop = threading.Event()
         self._recv_thread = None
+        self.git_host = None
+        self.git_cloud = None
 
     def pick_file(self):
         res = _window.create_file_dialog(webview.OPEN_DIALOG)
@@ -322,7 +371,7 @@ class Api:
                 self._send_start_index = self.sender.seek(requested)
                 count = 0
             else:
-                count = self.sender.resend_count
+                count = getattr(self.sender, "resend_count", 0)
             if self._send_thread and self._send_thread.is_alive():
                 return {"ok": True, "start_index": self._send_start_index,
                         "selection_count": count}
@@ -351,7 +400,8 @@ class Api:
             img = s.next_image()
             dataurl = self._image_dataurls.get(img)
             status = f"[{s.name}] {s.status()} · 已广播 {s.sent_frames} 帧"
-            publish_send_frame(dataurl, status)
+            if not self._publish_regular_frame(dataurl, status):
+                break
             # 补发模式持续循环不自动停; 默认广播达到 max(5遍, 30s) 后自动暂停,
             # 仅结束循环线程, 保留 Sender 与 _pos, 点“继续广播”从暂停处续播。
             if not s.is_resending and s.total:
@@ -365,6 +415,17 @@ class Api:
                     break
             time.sleep(1.0 / max(1, self.fps))
 
+    def _publish_regular_frame(self, dataurl, status):
+        while not self._send_stop.is_set():
+            if not self._qr_output_lock.acquire(timeout=0.1):
+                continue
+            try:
+                publish_send_frame(dataurl, status)
+                return True
+            finally:
+                self._qr_output_lock.release()
+        return False
+
     def _start_clipboard_watch(self):
         self._clipboard_watcher.start()
 
@@ -372,6 +433,8 @@ class Api:
         self._clipboard_watcher.stop()
 
     def _on_clipboard_text(self, text):
+        if is_clipboard_message(text):
+            return
         if not self._clipboard_monitor_enabled or self.sender is None:
             return
         if text == self._active_text:
@@ -385,18 +448,34 @@ class Api:
         self._start_clipboard_text_send(text)
 
     def _start_clipboard_text_send(self, text):
-        worker = threading.Thread(
-            target=self._run_clipboard_text_send, args=(text,), daemon=True)
-        self._clipboard_switch_thread = worker
-        worker.start()
+        with self._clipboard_switch_lock:
+            self._queued_clipboard_text = text
+            worker = self._clipboard_switch_thread
+            if worker and worker.is_alive():
+                return {"ok": True, "queued": True}
+            worker = threading.Thread(
+                target=self._run_clipboard_text_send, daemon=True)
+            self._clipboard_switch_thread = worker
+            worker.start()
         return {"ok": True, "queued": True}
 
-    def _run_clipboard_text_send(self, text):
-        result = self._replace_send_source(
-            ("text", text), self._send_error_level, self.fps,
-            from_clipboard=True)
-        if result and result.get("ok"):
-            _js("onClipboardSendStarted()")
+    def _run_clipboard_text_send(self):
+        while True:
+            with self._clipboard_switch_lock:
+                text = self._queued_clipboard_text
+                self._queued_clipboard_text = None
+            try:
+                result = self._replace_send_source(
+                    ("text", text), self._send_error_level, self.fps,
+                    from_clipboard=True)
+                if result and result.get("ok"):
+                    _js("onClipboardSendStarted()")
+            except Exception as exc:
+                _js(f"onSendError({_js_str(f'剪贴板切换失败: {exc}')})")
+            with self._clipboard_switch_lock:
+                if self._queued_clipboard_text is None:
+                    self._clipboard_switch_thread = None
+                    return
 
     def confirm_clipboard_send(self, seq=None):
         if seq is not None and int(seq) != self._pending_clipboard_seq:
@@ -413,9 +492,27 @@ class Api:
         self._pending_clipboard_text = None
         return {"ok": True}
 
-    def _set_clipboard(self, text):
+    def _write_clipboard(self, text):
         self._clipboard_watcher.ignore_text(text)
         set_clipboard(text)
+
+    def _tunnel_uses_clipboard(self):
+        for tunnel in (self.git_host, self.git_cloud):
+            try:
+                if tunnel and tunnel.status().get("running"):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _set_clipboard(self, text):
+        if self._tunnel_uses_clipboard():
+            return False
+        self._write_clipboard(text)
+        return True
+
+    def _set_tunnel_clipboard(self, text):
+        self._write_clipboard(text)
 
     def open_overlay(self):
         global _overlay_window, _overlay_minimized
@@ -475,12 +572,56 @@ class Api:
     def list_windows(self):
         return wincap.list_windows()
 
-    def set_window(self, hwnd):
-        self.hwnd = int(hwnd)
-        return {"ok": True}
+    def _set_role_hwnd(self, role, hwnd):
+        if role == "recv":
+            self.hwnd = hwnd
+        elif role == "git_host":
+            self._git_host_hwnd = hwnd
+        else:
+            raise ValueError("窗口角色无效")
+
+    def _role_hwnd(self, role):
+        if role == "recv":
+            return self.hwnd
+        if role == "git_host":
+            return self._git_host_hwnd
+        raise ValueError("窗口角色无效")
+
+    def set_window(self, hwnd, role="recv"):
+        hwnd = int(hwnd)
+        windows = wincap.list_windows()
+        selected = next((item for item in windows if int(item["hwnd"]) == hwnd), None)
+        self._set_role_hwnd(role, hwnd)
+        if selected:
+            self._window_targets[role] = wincap.window_target(selected)
+        return {"ok": True, "hwnd": hwnd,
+                "target": self._window_targets.get(role)}
+
+    def restore_window_target(self, role, target):
+        self._set_role_hwnd(role, None)
+        self._window_targets[role] = wincap.window_target(target or {})
+        hwnd = self._resolve_target_hwnd(role, force=True)
+        return {"ok": bool(hwnd), "hwnd": hwnd or 0}
+
+    def _resolve_target_hwnd(self, role, force=False):
+        current = self._role_hwnd(role)
+        target = self._window_targets.get(role)
+        if current and (wincap.window_exists(current) or not target):
+            return current
+        self._set_role_hwnd(role, None)
+        if not target:
+            return None
+        now = time.monotonic()
+        if not force and now < self._window_reconnect_after[role]:
+            return None
+        self._window_reconnect_after[role] = now + 1.0
+        match = wincap.resolve_window_target(target, wincap.list_windows())
+        if match:
+            self._set_role_hwnd(role, int(match["hwnd"]))
+        return self._role_hwnd(role)
 
     def start_recv(self):
-        if not self.hwnd:
+        if not self._resolve_target_hwnd("recv", force=True):
             return {"error": "请先选择窗口"}
         resumed = self.receiver is not None
         if self.receiver is None:
@@ -551,7 +692,13 @@ class Api:
         last_error_at = float("-inf")
         while not self._recv_stop.is_set():
             try:
-                img = wincap.grab_window(self.hwnd)
+                hwnd = self._resolve_target_hwnd("recv")
+                if not hwnd:
+                    raise RuntimeError("等待锁定窗口重新打开")
+                img = wincap.grab_window(hwnd)
+                if img is None:
+                    self.hwnd = None
+                    raise RuntimeError("等待锁定窗口重新打开")
                 self.receiver.feed(img)
                 last_error_at = float("-inf")  # 恢复正常 -> 下次异常立即提示
             except Exception as e:
@@ -573,7 +720,7 @@ class Api:
             return
         if task.is_text and text is not None:
             content = text.decode("utf-8", "replace")
-            # 静默写系统剪贴板，并把消息交给前端的有界历史列表展示。
+            # 隧道运行时只展示消息，避免自动写入覆盖其剪贴板控制通道。
             try:
                 self._set_clipboard(content)
             except Exception:
@@ -642,10 +789,123 @@ class Api:
         report["ok_flag"] = report["ok"]
         return report
 
+    # --- Git Smart HTTP 隧道 ---
+    def git_tunnel_start_host(self, hwnd=None):
+        if hwnd:
+            self.set_window(hwnd, "git_host")
+        target_hwnd = self._resolve_target_hwnd("git_host", force=True)
+        if not target_hwnd and self.hwnd:
+            target_hwnd = self.hwnd
+        if not target_hwnd:
+            return {"error": "请先选择云桌面窗口"}
+        if self.git_host and self.git_host.status().get("running"):
+            return {"ok": True, "status": self.git_host.status()}
+        self.git_host = HostTunnel(
+            frame_reader=self._git_tunnel_read_frames,
+            clipboard_writer=self._set_tunnel_clipboard,
+            focus_window=self._focus_git_window,
+            status=self._git_tunnel_status,
+        )
+        try:
+            self.git_host.start()
+            return {"ok": True, "status": self.git_host.status()}
+        except Exception as e:
+            self.git_host = None
+            return {"error": f"启动宿主机代理失败: {e}"}
+
+    def git_tunnel_stop_host(self):
+        if self.git_host:
+            self.git_host.stop()
+            self.git_host = None
+        return {"ok": True}
+
+    def git_tunnel_start_cloud(self, base_url):
+        if self.git_cloud and self.git_cloud.status().get("running"):
+            return {"ok": True, "status": self.git_cloud.status()}
+        try:
+            self.git_cloud = CloudTunnel(
+                base_url,
+                clipboard_reader=read_clipboard_text,
+                page_player=self._git_tunnel_play_pages,
+                status=self._git_tunnel_status,
+            )
+            self.git_cloud.start()
+            return {"ok": True, "status": self.git_cloud.status()}
+        except Exception as e:
+            self.git_cloud = None
+            return {"error": f"Git 基地址无效或启动失败: {e}"}
+
+    def git_tunnel_stop_cloud(self):
+        if self.git_cloud:
+            self.git_cloud.stop()
+            if self.git_cloud.status().get("running"):
+                return {"ok": False, "error": "云端转发正在结束，请稍后再试"}
+            self.git_cloud = None
+        return {"ok": True}
+
+    def git_tunnel_status(self):
+        return {
+            "host": self.git_host.status() if self.git_host else {"running": False},
+            "cloud": self.git_cloud.status() if self.git_cloud else {"running": False},
+        }
+
+    def _git_tunnel_read_frames(self):
+        hwnd = self._resolve_target_hwnd("git_host")
+        if not hwnd:
+            return []
+        img = wincap.grab_window(hwnd)
+        if img is None:
+            self._git_host_hwnd = None
+            return []
+        return P.decode_qr_all(img)
+
+    def _focus_git_window(self):
+        hwnd = self._resolve_target_hwnd("git_host", force=True)
+        return bool(hwnd and wincap.focus_window(hwnd))
+
+    def _git_tunnel_status(self, message):
+        try:
+            _js(f"onGitTunnelStatus({_js_str(str(message))})")
+        except Exception:
+            pass
+
+    def _git_tunnel_play_pages(self, pages, status, req_id, is_cancelled=None):
+        is_cancelled = is_cancelled or (lambda: False)
+        if is_cancelled() or not pages:
+            return
+        self.open_overlay()
+        with self._qr_output_lock:
+            self._play_git_qr_pages(pages, status, req_id, is_cancelled)
+
+    def _play_git_qr_pages(self, pages, status, req_id, is_cancelled):
+        loops = 6 if len(pages) == 1 else 5
+        interval = GIT_QR_SINGLE_SECONDS if len(pages) == 1 else GIT_QR_FRAME_SECONDS
+        encoder = lambda page: P.encode_qr_png(page, error="l", scale=5, border=3)
+        with GitQrPageCache(encoder) as cache:
+            dataurl = None
+            for cycle in range(loops):
+                for offset, page in enumerate(pages):
+                    if is_cancelled():
+                        return
+                    signal = read_clipboard_text() or ""
+                    if signal in (f"ASGT1:DONE:{req_id}", f"ASGT1:CANCEL:{req_id}"):
+                        return
+                    if dataurl is None:
+                        dataurl = cache.get(offset, page)
+                    started = time.monotonic()
+                    publish_send_frame(dataurl, f"{status} · {offset + 1}/{len(pages)}")
+                    has_next = cycle < loops - 1 or offset < len(pages) - 1
+                    if not has_next:
+                        continue
+                    next_index = (offset + 1) % len(pages)
+                    dataurl = cache.get(next_index, pages[next_index])
+                    time.sleep(max(0, interval - (time.monotonic() - started)))
+
     def copy_text(self, text):
         """逐条复制: 前端点消息旁的复制图标, 把该条文本重新写入剪贴板。"""
         try:
-            self._set_clipboard(text)
+            if not self._set_clipboard(text):
+                return {"ok": False, "error": "Git 隧道运行中，剪贴板已受保护"}
             return {"ok": True}
         except Exception:
             return {"ok": False}
@@ -726,12 +986,11 @@ def main():
 
     api = Api()
     window = webview.create_window(
-        "AirScan-QR · PC → PC",
+        APP_TITLE,
         url=_resource_path("ui.html"),
         js_api=api,
-        width=820,
-        height=900,
-        min_size=(380, 480),
+        width=566,
+        height=1174,
     )
     global _window
     _window = window

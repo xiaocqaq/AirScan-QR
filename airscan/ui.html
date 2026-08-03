@@ -8,12 +8,13 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="icon.ico" alt="">Air<span>Scan</span>-QR <small>屏幕二维码流 · PC → PC</small></div>
+    <div class="brand"><img class="brand-logo" src="icon.ico" alt="">Air<span>Scan</span>-QR</div>
     <div class="topbar-right">
       <nav class="tabs" aria-label="工作模式">
         <button class="tab active" id="tab-send" onclick="switchTab('send')">发送</button>
         <button class="tab" id="tab-recv" onclick="switchTab('recv')">接收</button>
         <button class="tab" id="tab-sync" onclick="switchTab('sync')">文件夹同步</button>
+        <button class="tab" id="tab-tunnel" onclick="switchTab('tunnel')">Git 隧道</button>
       </nav>
       <button class="theme-toggle" id="themeToggle" onclick="cycleTheme()"
         title="主题: 跟随系统" aria-label="切换主题">🌓</button>
@@ -173,6 +174,66 @@
         </div>
       </div>
       <div class="statusbar" id="syncStatus">就绪</div>
+    </section>
+
+    <section class="panel" id="panel-tunnel">
+      <div class="card sync-flow-card">
+        <div class="sync-flow-hint">
+          IDEA 继续使用原生 Git 按钮；AirScan 只把 <b>127.0.0.1:9999</b> 的
+          Git Smart HTTP 请求转进云桌面内网 Git，不保存密码或 token。
+        </div>
+      </div>
+
+      <div class="sync-columns">
+        <div class="card sync-role-card">
+          <div class="sync-role-title"><span class="sync-role-icon git-role-icon">Git</span>宿主机 · IDEA 所在机器
+            <small class="sync-role-sub">选择云桌面窗口，启动本机 127.0.0.1:9999 代理</small>
+          </div>
+          <div class="sync-step">
+            <div class="sync-step-label"><span class="sync-num">1</span>选择云桌面窗口</div>
+            <div class="row">
+              <select id="gitHostWindow" style="flex:1" onchange="onGitWindowPick()">
+                <option value="">选择云桌面窗口...</option>
+              </select>
+              <button class="btn btn-gray" onclick="refreshGitWindows()">刷新</button>
+            </div>
+          </div>
+          <div class="sync-step">
+            <div class="sync-step-label"><span class="sync-num">2</span>启动本地代理</div>
+            <div class="download-line">
+              <span>IDEA remote</span>
+              <span class="download-path">http://用户名@127.0.0.1:9999/group/repo.git</span>
+            </div>
+            <div class="row git-action-row">
+              <button class="btn btn-primary" id="btnGitHostStart" onclick="gitStartHost()">启动代理</button>
+              <button class="btn btn-gray" id="btnGitHostStop" onclick="gitStopHost()" disabled>停止代理</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card sync-role-card">
+          <div class="sync-role-title"><span class="sync-role-icon git-role-icon">HTTP</span>云桌面 · 内网 Git 可达机器
+            <small class="sync-role-sub">填写内网 Git 基地址，路径由 IDEA 请求原样带入</small>
+          </div>
+          <div class="sync-step">
+            <div class="sync-step-label"><span class="sync-num">1</span>Git 基地址</div>
+            <div class="row">
+              <input id="gitBaseUrl" class="git-base-input" type="text"
+                value="http://192.168.21.14:8888" aria-label="Git 基地址">
+            </div>
+            <div class="hint-line">只填 http://host:port；不要填写用户名、密码或 /group/repo.git。</div>
+            <div class="hint-line">认证头会短暂经过剪贴板和二维码；AirScan 不落盘保存，也不在界面显示。</div>
+          </div>
+          <div class="sync-step">
+            <div class="sync-step-label"><span class="sync-num">2</span>启动云端转发</div>
+            <div class="row git-action-row">
+              <button class="btn btn-primary" id="btnGitCloudStart" onclick="gitStartCloud()">启动转发</button>
+              <button class="btn btn-gray" id="btnGitCloudStop" onclick="gitStopCloud()" disabled>停止转发</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="statusbar" id="gitTunnelStatus">就绪 · 支持 fetch / pull / push</div>
     </section>
   </main>
 

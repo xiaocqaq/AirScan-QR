@@ -1,9 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+from build_metadata import executable_name
 from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.hooks import collect_dynamic_libs
 
 datas = [('airscan/ui.html', '.'), ('airscan/ui.css', '.'), ('airscan/ui.js', '.'), ('airscan/icon.ico', '.')]
-binaries = []
+vcr120 = os.environ.get('VCR120_DLL')
+binaries = [(vcr120, '.')] if vcr120 and os.path.isfile(vcr120) else []
 datas += collect_data_files('webview')
 binaries += collect_dynamic_libs('pyzbar')
 
@@ -33,7 +36,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='AirScan-QR',
+    name=executable_name('AirScan-QR', 'version_info.txt'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

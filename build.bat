@@ -8,18 +8,25 @@ if not exist "%VCR120_DLL%" goto :vcrerr
 REM MFC140U_DLL is required by pywin32's win32ui.pyd on clean Windows PCs.
 if not defined MFC140U_DLL set "MFC140U_DLL=%SystemRoot%\System32\mfc140u.dll"
 if not exist "%MFC140U_DLL%" goto :mfcerr
+for /f "delims=" %%V in ('python -c "from build_metadata import product_version; print(product_version('version_info.txt'))"') do set "APP_VERSION=%%V"
+if not defined APP_VERSION goto :versionerr
 
 echo [1/2] Installing build dependencies...
-python -m pip install segno pyzbar pillow pywebview pywin32 pyinstaller
+python -m pip install -r requirements.txt pyinstaller
 if errorlevel 1 goto :err
 
-echo [2/2] Building dist\AirScan-QR.exe...
+echo [2/2] Building dist\AirScan-QR-%APP_VERSION%.exe...
 python -m PyInstaller --noconfirm --upx-dir tools\upx-4.2.4-win64 AirScan-QR.spec
 if errorlevel 1 goto :err
 
 echo.
-echo Build complete: dist\AirScan-QR.exe
+echo Build complete: dist\AirScan-QR-%APP_VERSION%.exe
 goto :eof
+
+:versionerr
+echo.
+echo Build failed: ProductVersion could not be read from version_info.txt.
+exit /b 1
 
 :vcrerr
 echo.
