@@ -7,7 +7,6 @@
 }
 
 :root {
-  --ui-scale: 1;
   /* 清爽扁平 (clean flat): 纯色卡片 + 清晰边框 + 柔和阴影, 无毛玻璃 */
   --bg: #f6f7f9;
   --card: #ffffff;
@@ -75,8 +74,6 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: scale(var(--ui-scale));
-  transform-origin: top left;
   background: var(--bg);
   color: var(--ink);
   font-family: "微软雅黑", system-ui, -apple-system, "Segoe UI", "Segoe UI Emoji", sans-serif;

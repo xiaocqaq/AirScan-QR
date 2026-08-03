@@ -793,7 +793,10 @@ class Api:
     def git_tunnel_start_host(self, hwnd=None):
         if hwnd:
             self.set_window(hwnd, "git_host")
-        target_hwnd = self._resolve_target_hwnd("git_host", force=True)
+            target_hwnd = self._git_host_hwnd
+        else:
+            target_hwnd = (self._git_host_hwnd
+                           or self._resolve_target_hwnd("git_host", force=True))
         if not target_hwnd and self.hwnd:
             target_hwnd = self.hwnd
         if not target_hwnd:
@@ -850,7 +853,9 @@ class Api:
         }
 
     def _git_tunnel_read_frames(self):
-        hwnd = self._resolve_target_hwnd("git_host")
+        hwnd = self._git_host_hwnd
+        if not hwnd:
+            hwnd = self._resolve_target_hwnd("git_host")
         if not hwnd:
             return []
         img = wincap.grab_window(hwnd)
@@ -860,7 +865,8 @@ class Api:
         return P.decode_qr_all(img)
 
     def _focus_git_window(self):
-        hwnd = self._resolve_target_hwnd("git_host", force=True)
+        hwnd = (self._git_host_hwnd
+                or self._resolve_target_hwnd("git_host", force=True))
         return bool(hwnd and wincap.focus_window(hwnd))
 
     def _git_tunnel_status(self, message):
@@ -991,6 +997,7 @@ def main():
         js_api=api,
         width=566,
         height=1174,
+        min_size=(380, 480),
     )
     global _window
     _window = window

@@ -1,25 +1,7 @@
 const GRID_FPS_DEFAULTS = { 1: 8, 2: 5, 3: 3 };
 const HISTORY_ITEM_LIMIT = 5;
-const UI_REFERENCE_WIDTH = 552;
 window._fpsTouched = false;
 window._sendPaused = false;
-
-let uiScaleFrame = 0;
-function syncUiScale() {
-  uiScaleFrame = 0;
-  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-  const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-  const scale = Math.min(1, viewportWidth / UI_REFERENCE_WIDTH);
-  document.documentElement.style.setProperty('--ui-scale', String(scale));
-  document.body.style.width = `${viewportWidth / scale}px`;
-  document.body.style.height = `${viewportHeight / scale}px`;
-}
-function scheduleUiScale() {
-  if (uiScaleFrame) cancelAnimationFrame(uiScaleFrame);
-  uiScaleFrame = requestAnimationFrame(syncUiScale);
-}
-syncUiScale();
-window.addEventListener('resize', scheduleUiScale, { passive: true });
 
 function api(name, ...args) {
   return window.pywebview.api[name](...args);
@@ -710,9 +692,8 @@ async function refreshGitTunnelStatus() {
 async function gitStartHost() {
   const hwnd = document.getElementById('gitHostWindow').value;
   if (!hwnd) { toast('请先选择云桌面窗口'); return; }
-  await onGitWindowPick();
   await runGitTunnelAction('host', 'start',
-    () => api('git_tunnel_start_host'),
+    () => api('git_tunnel_start_host', hwnd),
     '宿主机代理已启动 · IDEA 使用 127.0.0.1:9999');
 }
 async function gitStopHost() {
