@@ -35,12 +35,6 @@
             style="display:none" aria-label="移除所选文件">×</button>
         </div>
         <div class="row settings-row">
-          <label class="lbl" for="gridSel">宫格</label>
-          <select id="gridSel" onchange="onGridChange()">
-            <option value="1" selected>1×1</option>
-            <option value="2">2×2</option>
-            <option value="3">3×3</option>
-          </select>
           <label class="lbl" for="errSel">纠错</label>
           <select id="errSel">
             <option value="l">L 低</option>
@@ -51,9 +45,6 @@
           <input type="range" id="fpsRange" min="1" max="20" value="8"
             oninput="onFpsInput(this)">
           <span class="val" id="fpsVal">8</span>
-          <label class="lbl" for="startIndex">起始序号</label>
-          <input class="number-input" type="number" id="startIndex" min="1" value="1"
-            inputmode="numeric" title="从指定帧开始顺序循环发送">
         </div>
         <details class="resend-tools">
           <summary>缺失序号补发</summary>

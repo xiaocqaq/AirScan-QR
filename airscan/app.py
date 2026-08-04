@@ -22,7 +22,13 @@ from .git_tunnel_protocol import is_clipboard_message
 from .overlay import OVERLAY_HTML
 from .sender import Sender, load_file, load_text, parse_frame_selection
 from .receiver import Receiver
-from .storage import default_download_dir, save_received_file, set_clipboard
+from .storage import (
+    default_download_dir,
+    load_overlay_geometry,
+    save_overlay_geometry,
+    save_received_file,
+    set_clipboard,
+)
 
 
 def _resource_path(name: str) -> str:
@@ -113,11 +119,20 @@ def _preview_text(text: str, limit: int = 60) -> str:
 _window = None  # 保持模块级，避免 pywebview introspect 内部 .NET 对象。
 _overlay_window = None
 _overlay_minimized = False
+_overlay_geometry_state = None
+_overlay_save_timer = None
+_overlay_geometry_lock = threading.Lock()
 _tray = None    # 托盘图标 (pystray.Icon)
 _really_quit = False  # True 时 closing 事件放行真正退出
 APP_TITLE = "AirScan-QR"
+OVERLAY_TITLE = "AirScan-QR 悬浮广播"
 GIT_QR_FRAME_SECONDS = 0.4
 GIT_QR_SINGLE_SECONDS = 0.25
+OVERLAY_WIDTH = 360
+OVERLAY_HEIGHT = 420
+OVERLAY_MARGIN = 12
+OVERLAY_MIN_WIDTH = 180
+OVERLAY_MIN_HEIGHT = 220
 
 
 def _js(code: str):
@@ -136,13 +151,70 @@ def _overlay_js(code: str):
         pass
 
 
-def _set_overlay_on_top(on_top: bool):
-    if _overlay_window is None:
-        return
-    try:
-        _overlay_window.on_top = bool(on_top)
-    except Exception:
-        pass
+def _screen_work_area(screen):
+    work = getattr(screen, "frame", None)
+    return (
+        int(getattr(work, "Left", screen.x)),
+        int(getattr(work, "Top", screen.y)),
+        int(getattr(work, "Right", screen.x + screen.width)),
+        int(getattr(work, "Bottom", screen.y + screen.height)),
+    )
+
+
+def _overlap_area(geometry, area):
+    left, top, right, bottom = area
+    overlap_width = max(0, min(geometry["x"] + geometry["width"], right)
+                        - max(geometry["x"], left))
+    overlap_height = max(0, min(geometry["y"] + geometry["height"], bottom)
+                         - max(geometry["y"], top))
+    return overlap_width * overlap_height
+
+
+def _fit_overlay_geometry(saved=None, screens=None):
+    saved = saved or {}
+    screens = list(screens or webview.screens)
+    width = max(OVERLAY_MIN_WIDTH, int(saved.get("width", OVERLAY_WIDTH)))
+    height = max(OVERLAY_MIN_HEIGHT, int(saved.get("height", OVERLAY_HEIGHT)))
+    candidate = {
+        "x": int(saved.get("x", 0)), "y": int(saved.get("y", 0)),
+        "width": width, "height": height,
+    }
+    areas = [_screen_work_area(screen) for screen in screens]
+    scores = [_overlap_area(candidate, area) for area in areas]
+    index = max(range(len(areas)), key=scores.__getitem__)
+    left, top, right, bottom = areas[index if scores[index] else 0]
+    width = min(width, right - left)
+    height = min(height, bottom - top)
+    if saved and scores[index]:
+        x = min(max(candidate["x"], left), right - width)
+        y = min(max(candidate["y"], top), bottom - height)
+    else:
+        x = right - width - OVERLAY_MARGIN
+        y = bottom - height - OVERLAY_MARGIN
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _flush_overlay_geometry():
+    global _overlay_save_timer
+    with _overlay_geometry_lock:
+        _overlay_save_timer = None
+        if _overlay_geometry_state:
+            try:
+                save_overlay_geometry(_overlay_geometry_state)
+            except OSError:
+                pass
+
+
+def _update_overlay_geometry(**changes):
+    global _overlay_geometry_state, _overlay_save_timer
+    with _overlay_geometry_lock:
+        _overlay_geometry_state = dict(_overlay_geometry_state or {})
+        _overlay_geometry_state.update({key: int(value) for key, value in changes.items()})
+        if _overlay_save_timer:
+            _overlay_save_timer.cancel()
+        _overlay_save_timer = threading.Timer(0.4, _flush_overlay_geometry)
+        _overlay_save_timer.daemon = True
+        _overlay_save_timer.start()
 
 
 def _on_sync_drop(event):
@@ -256,6 +328,7 @@ class Api:
         self._recv_thread = None
         self.git_host = None
         self.git_cloud = None
+        self._git_qr_active = threading.Event()
 
     def pick_file(self):
         res = _window.create_file_dialog(webview.OPEN_DIALOG)
@@ -291,7 +364,9 @@ class Api:
             self._send_stop.set()
             old = self._send_thread
             if old and old.is_alive() and old is not threading.current_thread():
-                old.join()
+                old.join(timeout=1.0)
+                if old.is_alive():
+                    return {"error": "上一广播正在收尾，请稍后重试"}
             self.sender = None
             self._image_dataurls.clear()
             # 同步广播 (清单) 不监听剪贴板, 否则复制文本会顶掉正在广播的清单。
@@ -302,9 +377,9 @@ class Api:
             self._send_is_file = src[0] == "file"
             self._pending_clipboard_text = None
             self._send_start_index = max(1, int(start_index))
-            # grid 为 None 表示沿用当前设置 (剪贴板热切换): 复用上次的宫格数。
+            # 弹窗固定单二维码，减少高 DPI 下的 WebView 合成压力。
             if grid is not None:
-                self._send_grid = max(1, int(grid))
+                self._send_grid = 1
             self._send_stop.clear()
             self.open_overlay()
             self._send_thread = threading.Thread(
@@ -330,7 +405,7 @@ class Api:
             _js(f"onSendError({_js_str(f'发送失败: {e}')})")
             self._clipboard_monitor_enabled = False
             self._stop_clipboard_watch()
-            self.close_overlay()
+            self.hide_overlay()
             return
         _js(f"onSendReady({self.sender.total}, {self.sender.start_index})")
         self._start_clipboard_watch()
@@ -344,11 +419,7 @@ class Api:
             self._send_stop.set()
             self._clipboard_monitor_enabled = False
             self._stop_clipboard_watch()
-            _set_overlay_on_top(False)
-            _overlay_js("onOverlayPaused('已暂停广播')")
-            old = self._send_thread
-            if old and old.is_alive() and old is not threading.current_thread():
-                old.join()
+            # 不在 WebView RPC 线程等待广播线程，窗口卡顿时也能立即返回。
             return {"ok": True}
 
     def resume_send(self, start_index, resend_spec=None):
@@ -373,6 +444,8 @@ class Api:
             else:
                 count = getattr(self.sender, "resend_count", 0)
             if self._send_thread and self._send_thread.is_alive():
+                if self._send_stop.is_set():
+                    return {"error": "广播正在收尾，请稍后重试"}
                 return {"ok": True, "start_index": self._send_start_index,
                         "selection_count": count}
             self._send_stop.clear()
@@ -395,25 +468,27 @@ class Api:
     def _send_loop(self):
         start = time.monotonic()
         base_frames = self.sender.sent_frames if self.sender else 0
-        while not self._send_stop.is_set() and self.sender:
-            s = self.sender
-            img = s.next_image()
-            dataurl = self._image_dataurls.get(img)
-            status = f"[{s.name}] {s.status()} · 已广播 {s.sent_frames} 帧"
-            if not self._publish_regular_frame(dataurl, status):
-                break
-            # 补发模式持续循环不自动停; 默认广播达到 max(5遍, 30s) 后自动暂停,
-            # 仅结束循环线程, 保留 Sender 与 _pos, 点“继续广播”从暂停处续播。
-            if not s.is_resending and s.total:
-                cycles = (s.sent_frames - base_frames) / s.total
-                elapsed = time.monotonic() - start
-                if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
-                    self._send_stop.set()
-                    _set_overlay_on_top(False)
-                    _overlay_js("onOverlayPaused('已自动暂停广播')")
-                    _js(f"onSendAutoStopped({int(cycles)})")
+        try:
+            while not self._send_stop.is_set() and self.sender:
+                s = self.sender
+                img = s.next_image()
+                dataurl = self._image_dataurls.get(img)
+                status = f"[{s.name}] {s.status()} · 已广播 {s.sent_frames} 帧"
+                if not self._publish_regular_frame(dataurl, status):
                     break
-            time.sleep(1.0 / max(1, self.fps))
+                # 补发持续循环；普通任务满足 5 遍且 30 秒后收回弹窗并保留进度。
+                if not s.is_resending and s.total:
+                    cycles = (s.sent_frames - base_frames) / s.total
+                    elapsed = time.monotonic() - start
+                    if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
+                        self._send_stop.set()
+                        _js(f"onSendAutoStopped({int(cycles)})")
+                        break
+                time.sleep(1.0 / max(1, self.fps))
+        finally:
+            if self._send_thread is threading.current_thread():
+                self._send_thread = None
+            self._hide_overlay_if_idle()
 
     def _publish_regular_frame(self, dataurl, status):
         while not self._send_stop.is_set():
@@ -516,58 +591,40 @@ class Api:
 
     def open_overlay(self):
         global _overlay_window, _overlay_minimized
-        if _overlay_window is not None:
-            try:
-                _overlay_window.show()
-                _overlay_minimized = False
-                _set_overlay_on_top(True)
-                return {"ok": True}
-            except Exception:
-                _overlay_window = None
-                _overlay_minimized = False
-        _overlay_minimized = False
-        _overlay_window = webview.create_window(
-            "AirScan-QR 悬浮广播",
-            html=OVERLAY_HTML,
-            js_api=self,
-            width=360,
-            height=420,
-            min_size=(180, 220),
-            resizable=True,
-            on_top=True,
-        )
+        if _overlay_window is None:
+            return {"error": "悬浮窗尚未就绪"}
         try:
-            def on_minimized():
-                global _overlay_minimized
-                _overlay_minimized = True
+            geometry = _fit_overlay_geometry(_overlay_geometry_state)
+            _overlay_window.resize(geometry["width"], geometry["height"])
+            _overlay_window.move(geometry["x"], geometry["y"])
+            _overlay_window.on_top = True
+            _overlay_window.show()
+            _overlay_minimized = False
+            return {"ok": True}
+        except Exception as exc:
+            return {"error": f"悬浮窗显示失败: {exc}"}
 
-            def on_restored():
-                global _overlay_minimized
-                _overlay_minimized = False
-
-            def on_closing():
-                global _overlay_window, _overlay_minimized
-                _overlay_window = None
-                _overlay_minimized = False
-                return True
-            _overlay_window.events.minimized += on_minimized
-            _overlay_window.events.restored += on_restored
-            _overlay_window.events.closing += on_closing
+    def hide_overlay(self):
+        """收回弹窗但保留 WebView，下个任务直接复用，避免反复创建窗口。"""
+        global _overlay_minimized
+        if _overlay_window is None:
+            return {"ok": True}
+        _overlay_minimized = True
+        try:
+            _overlay_window.hide()
         except Exception:
             pass
+        _flush_overlay_geometry()
         return {"ok": True}
 
-    def close_overlay(self):
-        global _overlay_window, _overlay_minimized
-        overlay = _overlay_window
-        _overlay_window = None
-        _overlay_minimized = False
-        if overlay is not None:
-            try:
-                overlay.destroy()
-            except Exception:
-                pass
-        return {"ok": True}
+    def _hide_overlay_if_idle(self):
+        """普通发送和 Git 播放都结束后才收回共用二维码弹窗。"""
+        send_active = bool(
+            self._send_thread and self._send_thread.is_alive()
+            and not self._send_stop.is_set()
+        )
+        if not send_active and not self._git_qr_active.is_set():
+            self.hide_overlay()
 
     def list_windows(self):
         return wincap.list_windows()
@@ -879,9 +936,14 @@ class Api:
         is_cancelled = is_cancelled or (lambda: False)
         if is_cancelled() or not pages:
             return
-        self.open_overlay()
-        with self._qr_output_lock:
-            self._play_git_qr_pages(pages, status, req_id, is_cancelled)
+        self._git_qr_active.set()
+        try:
+            self.open_overlay()
+            with self._qr_output_lock:
+                self._play_git_qr_pages(pages, status, req_id, is_cancelled)
+        finally:
+            self._git_qr_active.clear()
+            self._hide_overlay_if_idle()
 
     def _play_git_qr_pages(self, pages, status, req_id, is_cancelled):
         loops = 6 if len(pages) == 1 else 5
@@ -941,6 +1003,7 @@ def _quit_app(*_):
     """从托盘退出: 置标志, 停托盘, 销毁窗口 (closing 会放行)。"""
     global _really_quit
     _really_quit = True
+    _flush_overlay_geometry()
     if _tray is not None:
         _tray.stop()
     if _window is not None:
@@ -975,32 +1038,65 @@ def _start_tray():
 
 
 def main():
+    global _window, _overlay_window, _overlay_minimized, _overlay_geometry_state
     if sys.platform == "win32":
-        try:
-            from ctypes import windll
-            windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-        except Exception:
-            try:
-                windll.user32.SetProcessDPIAware()
-            except Exception:
-                pass
         # 绑定 AppUserModelID: 让任务栏用 exe 自带的 QR 图标, 而非默认 python 图标。
         try:
+            from ctypes import windll
             windll.shell32.SetCurrentProcessExplicitAppUserModelID("AirScan-QR")
         except Exception:
             pass
 
     api = Api()
+    _overlay_geometry_state = _fit_overlay_geometry(load_overlay_geometry())
     window = webview.create_window(
         APP_TITLE,
         url=_resource_path("ui.html"),
         js_api=api,
         width=566,
         height=1174,
-        min_size=(380, 480),
     )
-    global _window
+    overlay = webview.create_window(
+        OVERLAY_TITLE,
+        html=OVERLAY_HTML,
+        js_api=api,
+        width=_overlay_geometry_state["width"],
+        height=_overlay_geometry_state["height"],
+        min_size=(OVERLAY_MIN_WIDTH, OVERLAY_MIN_HEIGHT),
+        resizable=True,
+        hidden=True,
+        on_top=True,
+        focus=True,
+        x=_overlay_geometry_state["x"],
+        y=_overlay_geometry_state["y"],
+    )
     _window = window
+    _overlay_window = overlay
+    _overlay_minimized = True
+
+    def on_overlay_minimized():
+        global _overlay_minimized
+        _overlay_minimized = True
+
+    def on_overlay_restored():
+        global _overlay_minimized
+        _overlay_minimized = False
+
+    def on_overlay_moved(x, y):
+        _update_overlay_geometry(x=x, y=y)
+
+    def on_overlay_resized(width, height):
+        _update_overlay_geometry(width=width, height=height)
+
+    def on_overlay_closing():
+        api.hide_overlay()
+        return False
+
+    overlay.events.minimized += on_overlay_minimized
+    overlay.events.restored += on_overlay_restored
+    overlay.events.moved += on_overlay_moved
+    overlay.events.resized += on_overlay_resized
+    overlay.events.closing += on_overlay_closing
     window.events.closing += _on_closing
     window.events.loaded += _on_window_loaded
     _start_tray()

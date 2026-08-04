@@ -1,7 +1,25 @@
-const GRID_FPS_DEFAULTS = { 1: 8, 2: 5, 3: 3 };
 const HISTORY_ITEM_LIMIT = 5;
+const UI_REFERENCE_WIDTH = 552;
 window._fpsTouched = false;
 window._sendPaused = false;
+window._sendStartIndex = 1;
+
+let uiScaleFrame = 0;
+function syncUiScale() {
+  uiScaleFrame = 0;
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+  const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+  const scale = Math.min(1, viewportWidth / UI_REFERENCE_WIDTH);
+  document.documentElement.style.setProperty('--ui-scale', String(scale));
+  document.body.style.width = `${viewportWidth / scale}px`;
+  document.body.style.height = `${viewportHeight / scale}px`;
+}
+function scheduleUiScale() {
+  if (uiScaleFrame) cancelAnimationFrame(uiScaleFrame);
+  uiScaleFrame = requestAnimationFrame(syncUiScale);
+}
+syncUiScale();
+window.addEventListener('resize', scheduleUiScale, { passive: true });
 
 function api(name, ...args) {
   return window.pywebview.api[name](...args);
@@ -132,25 +150,15 @@ function onFpsInput(input) {
   document.getElementById('fpsVal').innerText = input.value;
   if (window._sending) api('set_fps', +input.value);
 }
-function onGridChange() {
-  if (window._fpsTouched) return;
-  const grid = +document.getElementById('gridSel').value;
-  const fps = GRID_FPS_DEFAULTS[grid];
-  document.getElementById('fpsRange').value = fps;
-  document.getElementById('fpsVal').innerText = fps;
-}
 async function startSend() {
   const text = document.getElementById('inputText').value;
-  const grid = +document.getElementById('gridSel').value;
   const err = document.getElementById('errSel').value;
   const fps = +document.getElementById('fpsRange').value;
-  const startIndex = Math.max(1, +document.getElementById('startIndex').value || 1);
-  const result = await api('start_send', text, grid, err, fps, startIndex);
+  const result = await api('start_send', text, 1, err, fps, 1);
   if (result && result.error) {
     toast(result.error);
     return;
   }
-  if (result && result.grid) document.getElementById('gridSel').value = result.grid;
   document.getElementById('inputText').value = '';
   window._sending = true;
   window._sendPaused = false;
@@ -162,22 +170,19 @@ async function startSend() {
   document.getElementById('sendStatus').innerText = '正在处理...';
 }
 function onSendReady(total, startIndex) {
-  const input = document.getElementById('startIndex');
-  input.max = total;
-  input.value = startIndex;
+  window._sendStartIndex = startIndex;
   document.getElementById('btnResend').disabled = false;
   document.getElementById('btnResumeAll').disabled = true;
 }
 function onSendAutoStopped(cycles) {
-  // 默认展示达到阈值 (max 5遍/30s) 后自动暂停 (非停止): 保留任务与当前位置,
-  // 点“继续广播”从暂停处接着循环, 接收端漏帧仍可补收。
+  // 达到阈值后收回右下角弹窗，保留任务与当前位置供继续或补发。
   window._sending = false;
   window._sendPaused = true;
   document.getElementById('btnSend').disabled = false;
   document.getElementById('btnSend').innerText = '继续广播';
   document.getElementById('btnPauseSend').disabled = true;
   document.getElementById('sendStatus').innerText =
-     '已播 ' + cycles + ' 遍, 自动暂停 · 点“继续广播”可继续播放';
+     '已播 ' + cycles + ' 遍, 弹窗已收回 · 点“继续广播”可继续播放';
 }
 function onClipboardSendStarted() {
   window._sending = true;
@@ -223,11 +228,10 @@ async function pauseSend() {
   document.getElementById('btnSend').disabled = false;
   document.getElementById('btnSend').innerText = '继续广播';
   document.getElementById('btnPauseSend').disabled = true;
-  document.getElementById('sendStatus').innerText = '已暂停 · 可修改起始序号后继续';
+  document.getElementById('sendStatus').innerText = '已暂停 · 可继续广播或补发缺失帧';
 }
 async function resumeSend() {
-  const startIndex = Math.max(1, +document.getElementById('startIndex').value || 1);
-  const result = await api('resume_send', startIndex);
+  const result = await api('resume_send', window._sendStartIndex || 1);
   if (result && result.error) {
     toast(result.error);
     return;
@@ -237,11 +241,10 @@ async function resumeSend() {
   document.getElementById('btnSend').disabled = true;
   document.getElementById('btnSend').innerText = '开始广播';
   document.getElementById('btnPauseSend').disabled = false;
-  document.getElementById('startIndex').value = result.start_index;
+  window._sendStartIndex = result.start_index;
 }
 async function applyResend(spec) {
-  const startIndex = Math.max(1, +document.getElementById('startIndex').value || 1);
-  const result = await api('resume_send', startIndex, spec);
+  const result = await api('resume_send', window._sendStartIndex || 1, spec);
   if (result && result.error) {
     toast(result.error);
     return;

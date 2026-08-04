@@ -1,4 +1,5 @@
 """接收文件的默认目录、命名冲突与流式保存。"""
+import json
 import os
 import re
 from pathlib import Path
@@ -11,6 +12,33 @@ _WINDOWS_RESERVED = {
     *(f"LPT{i}" for i in range(1, 10)),
 }
 _COPY_BUFFER_SIZE = 1024 * 1024
+_OVERLAY_STATE_KEYS = ("x", "y", "width", "height")
+
+
+def _overlay_state_path(base=None) -> Path:
+    root = Path(base) if base else Path(
+        os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share"
+    )
+    return root / "AirScan-QR" / "overlay-window.json"
+
+
+def load_overlay_geometry(base=None):
+    try:
+        data = json.loads(_overlay_state_path(base).read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        return {key: int(data[key]) for key in _OVERLAY_STATE_KEYS}
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def save_overlay_geometry(geometry, base=None):
+    path = _overlay_state_path(base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {key: int(geometry[key]) for key in _OVERLAY_STATE_KEYS}
+    temporary = path.with_suffix(f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def default_download_dir(home=None) -> Path:
