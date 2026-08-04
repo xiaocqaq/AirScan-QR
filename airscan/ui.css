@@ -7,7 +7,6 @@
 }
 
 :root {
-  --ui-scale: 1;
   /* 清爽扁平 (clean flat): 纯色卡片 + 清晰边框 + 柔和阴影, 无毛玻璃 */
   --bg: #f6f7f9;
   --card: #ffffff;
@@ -75,8 +74,6 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: scale(var(--ui-scale));
-  transform-origin: top left;
   background: var(--bg);
   color: var(--ink);
   font-family: "微软雅黑", system-ui, -apple-system, "Segoe UI", "Segoe UI Emoji", sans-serif;
@@ -319,18 +316,35 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
 .sync-result-detail::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 @media (max-width: 700px) {
+  :root { --control-height: 38px; }
   .topbar, .content { padding-inline: 16px; }
   .brand small { display: none; }
+  .card { padding: 16px; }
+  .send-card { padding: var(--chrome-pad) 14px; }
+  .btn { padding: 7px 12px; font-size: 13px; }
   .recv-actions { grid-template-columns: 1fr 1fr; }
   .resend-row { grid-template-columns: 1fr 1fr; }
   .resend-input { grid-column: 1 / -1; }
 }
-/* 更窄: 顶栏换行, 标签栏掉到第二行占满居中 */
+/* 更窄: 保持正文原始比例，仅压缩控件密度并重排顶栏。 */
 @media (max-width: 520px) {
-  .topbar { flex-wrap: wrap; }
-  .tabs { order: 3; flex-basis: 100%; justify-content: center; }
-  .tab { flex: 1; padding: 7px 10px; text-align: center; }
+  :root {
+    --chrome-gap: 6px;
+    --chrome-pad: 8px;
+    --top-pad: 8px;
+    --control-height: 36px;
+  }
+  .topbar, .content { padding-inline: 12px; }
+  .topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+  .topbar-right { display: contents; }
+  .tabs { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+  .tab { flex: 1; min-height: 34px; padding: 5px 8px; font-size: 13px; text-align: center; }
+  .theme-toggle { grid-column: 2; grid-row: 1; width: 36px; height: 34px; border-radius: 9px; font-size: 16px; }
   .brand { font-size: 18px; }
+  .brand-logo { width: 24px; height: 24px; border-radius: 7px; }
+  .card { margin-bottom: 10px; padding: 14px; border-radius: 12px; }
+  .send-card { padding: var(--chrome-pad) 12px; }
+  .btn { padding: 6px 10px; border-radius: 8px; font-size: 13px; }
 }
 @media (max-height: 780px) {
   :root { --chrome-gap: 6px; --chrome-pad: 7px; --top-pad: 7px; --input-height: 42px; --control-height: 34px; }
@@ -479,4 +493,15 @@ select:focus-visible, textarea:focus-visible, .number-input:focus-visible, .rese
 /* 窄屏: 两栏堆叠为单列 */
 @media (max-width: 720px) {
   .sync-columns { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
+  .sync-role-card { padding: 14px; }
+  .git-action-row .btn { padding-inline: 10px; }
+}
+
+@media (max-width: 520px) {
+  .sync-flow-card { padding: 9px 12px; }
+  .sync-role-card { padding: 12px; }
+  .git-action-row .btn { padding-inline: 8px; }
 }

@@ -124,8 +124,11 @@ _overlay_save_timer = None
 _overlay_geometry_lock = threading.Lock()
 _tray = None    # 托盘图标 (pystray.Icon)
 _really_quit = False  # True 时 closing 事件放行真正退出
+_instance_mutex = None
 APP_TITLE = "AirScan-QR"
 OVERLAY_TITLE = "AirScan-QR 悬浮广播"
+INSTANCE_MUTEX_NAME = r"Local\AirScan-QR.SingleInstance"
+ERROR_ALREADY_EXISTS = 183
 GIT_QR_FRAME_SECONDS = 0.4
 GIT_QR_SINGLE_SECONDS = 0.25
 OVERLAY_WIDTH = 360
@@ -133,6 +136,48 @@ OVERLAY_HEIGHT = 420
 OVERLAY_MARGIN = 12
 OVERLAY_MIN_WIDTH = 180
 OVERLAY_MIN_HEIGHT = 220
+
+
+def _acquire_single_instance(kernel32=None):
+    """使用跨版本命名 Mutex，避免重复启动多套托盘和 WebView。"""
+    global _instance_mutex
+    if sys.platform != "win32" or _instance_mutex is not None:
+        return True
+
+    native = kernel32 is None
+    if native:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL,
+                                          wintypes.LPCWSTR)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        ctypes.set_last_error(0)
+
+    handle = kernel32.CreateMutexW(None, False, INSTANCE_MUTEX_NAME)
+    error = ctypes.get_last_error() if native else kernel32.GetLastError()
+    if not handle:
+        if native:
+            raise ctypes.WinError(error)
+        return False
+    if error == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(handle)
+        return False
+    _instance_mutex = handle
+    return True
+
+
+def _notify_already_running():
+    try:
+        from ctypes import windll
+        windll.user32.MessageBoxW(
+            0, "AirScan-QR 已在运行，请从系统托盘打开。", APP_TITLE, 0x40
+        )
+    except Exception:
+        pass
 
 
 def _js(code: str):
@@ -408,7 +453,8 @@ class Api:
             self.hide_overlay()
             return
         _js(f"onSendReady({self.sender.total}, {self.sender.start_index})")
-        self._start_clipboard_watch()
+        if self._clipboard_monitor_enabled:
+            self._start_clipboard_watch()
         self._send_loop()
 
     def set_fps(self, fps):
@@ -486,6 +532,8 @@ class Api:
                         break
                 time.sleep(1.0 / max(1, self.fps))
         finally:
+            self._clipboard_monitor_enabled = False
+            self._stop_clipboard_watch()
             if self._send_thread is threading.current_thread():
                 self._send_thread = None
             self._hide_overlay_if_idle()
@@ -1039,6 +1087,9 @@ def _start_tray():
 
 def main():
     global _window, _overlay_window, _overlay_minimized, _overlay_geometry_state
+    if not _acquire_single_instance():
+        _notify_already_running()
+        return
     if sys.platform == "win32":
         # 绑定 AppUserModelID: 让任务栏用 exe 自带的 QR 图标, 而非默认 python 图标。
         try:
