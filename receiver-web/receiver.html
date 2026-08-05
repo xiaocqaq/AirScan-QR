@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AirScan-QR Web Receiver</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">AIRSCAN / WEB RECEIVER</p>
+        <h1>接收屏幕二维码</h1>
+        <p class="lede">选择发送端窗口后，浏览器在后台按原始分辨率持续解码，不依赖页面预览大小。</p>
+      </div>
+      <div class="protocol-mark" aria-label="AirScan QR 协议标识">AS<span>QR</span></div>
+    </header>
+
+    <section class="message-panel" aria-labelledby="messageTitle">
+      <div class="message-heading">
+        <div>
+          <p class="section-kicker">RECEIVED TEXT</p>
+          <h2 id="messageTitle">收到的文字</h2>
+        </div>
+        <span class="message-count" id="messageCount">0 条</span>
+      </div>
+      <p class="message-empty" id="messageEmpty">等待接收文字消息</p>
+      <div class="message-list" id="messageList" aria-live="polite"></div>
+    </section>
+
+    <section class="control-panel" aria-labelledby="controlTitle">
+      <div class="control-heading">
+        <div>
+          <p class="section-kicker">TRANSFER CONTROL</p>
+          <h2 id="controlTitle">接收设置</h2>
+        </div>
+        <span class="browser-note">Chrome / Edge 120+</span>
+      </div>
+      <div class="control-grid">
+        <label class="field">
+          <span>发送端宫格</span>
+          <select id="gridSelect">
+            <option value="1" selected>1×1 · 稳定优先</option>
+            <option value="2">2×2 · 并行扫描 4 区</option>
+            <option value="3">3×3 · 并行扫描 9 区</option>
+          </select>
+        </label>
+        <div class="field field-status">
+          <span>当前任务</span>
+          <strong id="taskName">暂无任务</strong>
+        </div>
+      </div>
+      <div class="action-row">
+        <button class="button button-primary" id="shareButton" type="button">选择共享窗口</button>
+        <button class="button button-secondary" id="pauseButton" type="button" disabled>暂停扫描</button>
+      </div>
+      <div class="progress-block" aria-live="polite">
+        <div class="progress-head">
+          <span>接收进度</span>
+          <strong id="progress">0 / 0</strong>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-meta"><span id="missingCount">缺失 0 帧</span><span id="storageLabel">浏览器本地存储</span></div>
+      </div>
+      <div class="secondary-actions">
+        <button class="text-button" id="missingButton" type="button" disabled>查看缺失序号</button>
+        <button class="text-button" id="downloadButton" type="button" disabled>重新下载文件</button>
+      </div>
+    </section>
+
+    <section class="notice" id="notice" aria-live="polite">
+      <strong>说明</strong>
+      <span>扫码不依赖页面预览。请只共享 <strong>AirScan-QR 发送端</strong>窗口，不要共享本接收页。浏览器顶部/角上的「正在共享」条是系统安全提示，网页无法关闭。文件传输时进度条约 8 次/秒刷新，减轻卡顿。</span>
+    </section>
+
+    <section class="status-panel" aria-labelledby="statusTitle">
+      <div class="status-heading">
+        <div>
+          <p class="section-kicker">SCAN ENGINE</p>
+          <h2 id="statusTitle">后台扫描</h2>
+        </div>
+        <span class="mode-chip" id="modeLabel">1×1 · 单区扫描</span>
+      </div>
+      <div class="status-body">
+        <div class="status-line" aria-live="polite">
+          <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+          <span id="status">就绪 · 点击“选择共享窗口”开始</span>
+        </div>
+        <div class="status-metrics">
+          <span class="frame-rate" id="captureRes">捕获 —</span>
+          <span class="scan-badge" id="scanBadge">未开始</span>
+          <span class="frame-rate" id="scanRate">0 FPS</span>
+        </div>
+      </div>
+      <p class="status-hint" id="stageEmpty">无预览。扫码读的是共享流原始像素（见「捕获 W×H」），不是页面上的小框。浏览器不能把别人的窗口在后台放大——请在桌面上把发送端窗口拉大。</p>
+    </section>
+
+    <!-- 隐藏采集源：必须存在才能播放 MediaStream 并按 videoWidth/Height 扫码 -->
+    <div class="capture-host" aria-hidden="true">
+      <video id="shareVideo" autoplay muted playsinline></video>
+      <canvas id="scanCanvas"></canvas>
+    </div>
+  </main>
+  <dialog id="missingDialog" aria-labelledby="missingTitle">
+    <div class="dialog-heading">
+      <div>
+        <p class="section-kicker">RECOVERY</p>
+        <h2 id="missingTitle">缺失序号</h2>
+      </div>
+      <button class="icon-button" id="closeDialog" type="button" aria-label="关闭缺失序号">×</button>
+    </div>
+    <p class="dialog-meta" id="missingMeta">暂无接收任务</p>
+    <pre class="missing-ranges" id="missingRanges">暂无缺失序号</pre>
+    <div class="dialog-actions">
+      <button class="button button-secondary" id="copyMissing" type="button">复制序号</button>
+      <button class="button button-primary" id="dialogDone" type="button">完成</button>
+    </div>
+  </dialog>
+  <script defer src="protocol.js"></script>
+  <script defer src="sha1.js"></script>
+  <script defer src="decoder.js"></script>
+  <script defer src="capture.js"></script>
+  <script defer src="transfer-store.js"></script>
+  <script defer src="receiver-core.js"></script>
+  <script defer src="messages.js"></script>
+  <script defer src="app.js"></script>
+</body>
+</html>

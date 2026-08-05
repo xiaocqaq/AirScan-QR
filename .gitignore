@@ -2,6 +2,7 @@
 ib.html
 /tests/
 /dist/
+/build/browser-smoke/
 /.idea/
 /build-1.6.0/
 /build-staging/

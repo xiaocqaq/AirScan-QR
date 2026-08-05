@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>ZXing Bytes Contract Harness</title></head>
+<body data-result="pending">
+  <img id="fixture" src="fixtures/data-frame.png" alt="测试二维码">
+  <pre id="output">pending</pre>
+  <script src="../protocol.js"></script>
+  <script type="module">
+    // Phase 0 准入闸：验证 zxing-wasm 的 result.bytes 能拿到未被字符集破坏的原始加扰字节，
+    // 与现有 jsQR 版 qr-harness.html 断言完全一致（index===7, payload==[0,255,1,128,13]）。
+    const VERSION = '3.1.2';
+    const READER_URL = `https://cdn.jsdelivr.net/npm/zxing-wasm@${VERSION}/dist/es/reader/index.js`;
+    const WASM_URL = `https://cdn.jsdelivr.net/npm/zxing-wasm@${VERSION}/dist/reader/zxing_reader.wasm`;
+
+    const output = document.getElementById('output');
+    function report(result, extra) {
+      document.body.dataset.result = result;
+      output.textContent = JSON.stringify({ result, ...extra }, null, 2);
+    }
+
+    (async () => {
+      try {
+        const { readBarcodes, setZXingModuleOverrides } = await import(READER_URL);
+        // ESM 在 dist/es/reader/，wasm 在 dist/reader/，默认相对定位会 404，必须显式指向。
+        setZXingModuleOverrides({
+          locateFile: (path, prefix) => (path.endsWith('.wasm') ? WASM_URL : prefix + path),
+        });
+
+        const img = document.getElementById('fixture');
+        await img.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.drawImage(img, 0, 0);
+        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+        const results = await readBarcodes(imageData, {
+          formats: ['QRCode'],
+          tryHarder: true,
+          maxNumberOfSymbols: 1,
+        });
+        const first = results && results[0];
+        if (!first || !first.bytes || !first.bytes.length) {
+          report('decode-failed', { fields: first ? Object.keys(first) : null });
+          return;
+        }
+        const raw = await window.AirScan.protocol.scramble(Uint8Array.from(first.bytes));
+        const frame = window.AirScan.protocol.parseFrame(raw);
+        const ok = frame && frame.type === 1 && frame.index === 7
+          && Array.from(frame.payload).join(',') === '0,255,1,128,13';
+        report(ok ? 'ok' : 'protocol-failed', {
+          fields: Object.keys(first),
+          index: frame && frame.index,
+          payload: frame && Array.from(frame.payload),
+        });
+      } catch (error) {
+        report('error', { message: String(error && error.stack || error) });
+      }
+    })();
+  </script>
+</body>
+</html>

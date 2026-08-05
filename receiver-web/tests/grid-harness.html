@@ -1,0 +1,33 @@
+<!doctype html>
+<html><body data-result="pending">
+  <img id="grid2" src="fixtures/window-grid-2.png" hidden alt="2x2 测试窗口">
+  <img id="grid3" src="fixtures/window-grid-3.png" hidden alt="3x3 测试窗口">
+  <canvas id="canvas"></canvas>
+  <pre id="output">pending</pre>
+  <script src="../vendor/jsQR.js"></script>
+  <script src="../protocol.js"></script>
+  <script src="../decoder.js"></script>
+  <script>
+    async function scan(image, grid) {
+      const canvas = document.getElementById('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      canvas.getContext('2d', { willReadFrequently: true }).drawImage(image, 0, 0);
+      const payloads = await window.AirScan.decoder.decodeFrame(canvas, grid);
+      const frames = await Promise.all(payloads.map(async (payload) => {
+        const raw = await window.AirScan.protocol.scramble(payload);
+        return window.AirScan.protocol.parseFrame(raw);
+      }));
+      return frames.filter(Boolean).length;
+    }
+
+    window.addEventListener('load', async () => {
+      const counts = {
+        grid2: await scan(document.getElementById('grid2'), 2),
+        grid3: await scan(document.getElementById('grid3'), 3),
+      };
+      document.body.dataset.result = counts.grid2 === 4 && counts.grid3 === 9 ? 'ok' : 'failed';
+      document.getElementById('output').textContent = JSON.stringify(counts);
+    }, { once: true });
+  </script>
+</body></html>
