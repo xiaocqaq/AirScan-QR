@@ -123,6 +123,7 @@ _overlay_geometry_state = None
 _overlay_save_timer = None
 _overlay_geometry_lock = threading.Lock()
 _tray = None    # 托盘图标 (pystray.Icon)
+_api = None
 _really_quit = False  # True 时 closing 事件放行真正退出
 _instance_mutex = None
 APP_TITLE = "AirScan-QR"
@@ -514,6 +515,7 @@ class Api:
     def _send_loop(self):
         start = time.monotonic()
         base_frames = self.sender.sent_frames if self.sender else 0
+        auto_idle = False
         try:
             while not self._send_stop.is_set() and self.sender:
                 s = self.sender
@@ -527,13 +529,15 @@ class Api:
                     cycles = (s.sent_frames - base_frames) / s.total
                     elapsed = time.monotonic() - start
                     if cycles >= self.AUTO_STOP_CYCLES and elapsed >= self.AUTO_STOP_SECONDS:
+                        auto_idle = True
                         self._send_stop.set()
                         _js(f"onSendAutoStopped({int(cycles)})")
                         break
                 time.sleep(1.0 / max(1, self.fps))
         finally:
-            self._clipboard_monitor_enabled = False
-            self._stop_clipboard_watch()
+            if not auto_idle:
+                self._clipboard_monitor_enabled = False
+                self._stop_clipboard_watch()
             if self._send_thread is threading.current_thread():
                 self._send_thread = None
             self._hide_overlay_if_idle()
@@ -619,18 +623,7 @@ class Api:
         self._clipboard_watcher.ignore_text(text)
         set_clipboard(text)
 
-    def _tunnel_uses_clipboard(self):
-        for tunnel in (self.git_host, self.git_cloud):
-            try:
-                if tunnel and tunnel.status().get("running"):
-                    return True
-            except Exception:
-                continue
-        return False
-
     def _set_clipboard(self, text):
-        if self._tunnel_uses_clipboard():
-            return False
         self._write_clipboard(text)
         return True
 
@@ -825,14 +818,14 @@ class Api:
             return
         if task.is_text and text is not None:
             content = text.decode("utf-8", "replace")
-            # 隧道运行时只展示消息，避免自动写入覆盖其剪贴板控制通道。
+            clipboard_status = ""
             try:
                 self._set_clipboard(content)
             except Exception:
-                pass
+                clipboard_status = "已接收文本，但写入剪贴板失败，可点击复制重试"
             _js(f"addMessage({_js_str(content)})")
             task.cleanup()
-            _js("onComplete(true, true, '')")
+            _js(f"onComplete(true, true, {_js_str(clipboard_status)})")
         else:
             try:
                 path = save_received_file(task.path, task.file_size, task.name)
@@ -1020,11 +1013,28 @@ class Api:
     def copy_text(self, text):
         """逐条复制: 前端点消息旁的复制图标, 把该条文本重新写入剪贴板。"""
         try:
-            if not self._set_clipboard(text):
-                return {"ok": False, "error": "Git 隧道运行中，剪贴板已受保护"}
+            self._set_clipboard(text)
             return {"ok": True}
-        except Exception:
-            return {"ok": False}
+        except Exception as exc:
+            return {"ok": False, "error": f"复制失败: {exc}"}
+
+    def shutdown(self):
+        """停止后台服务，供托盘真正退出时统一收尾。"""
+        for stop in (self.pause_send, self.pause_recv,
+                     self._clipboard_watcher.stop):
+            try:
+                stop()
+            except Exception:
+                pass
+        for name in ("git_host", "git_cloud"):
+            tunnel = getattr(self, name)
+            if tunnel:
+                try:
+                    tunnel.stop()
+                except Exception:
+                    pass
+                setattr(self, name, None)
+        return {"ok": True}
 
 
 def _tray_image():
@@ -1052,8 +1062,12 @@ def _quit_app(*_):
     global _really_quit
     _really_quit = True
     _flush_overlay_geometry()
+    if _api is not None:
+        _api.shutdown()
     if _tray is not None:
         _tray.stop()
+    if _overlay_window is not None:
+        _overlay_window.destroy()
     if _window is not None:
         _window.destroy()
 
@@ -1086,7 +1100,7 @@ def _start_tray():
 
 
 def main():
-    global _window, _overlay_window, _overlay_minimized, _overlay_geometry_state
+    global _api, _window, _overlay_window, _overlay_minimized, _overlay_geometry_state
     if not _acquire_single_instance():
         _notify_already_running()
         return
@@ -1099,6 +1113,7 @@ def main():
             pass
 
     api = Api()
+    _api = api
     _overlay_geometry_state = _fit_overlay_geometry(load_overlay_geometry())
     window = webview.create_window(
         APP_TITLE,
@@ -1140,6 +1155,8 @@ def main():
         _update_overlay_geometry(width=width, height=height)
 
     def on_overlay_closing():
+        if _really_quit:
+            return True
         api.hide_overlay()
         return False
 

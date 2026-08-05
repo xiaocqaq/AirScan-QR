@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 
@@ -12,6 +13,8 @@ _WINDOWS_RESERVED = {
     *(f"LPT{i}" for i in range(1, 10)),
 }
 _COPY_BUFFER_SIZE = 1024 * 1024
+_CLIPBOARD_RETRY_ATTEMPTS = 10
+_CLIPBOARD_RETRY_SECONDS = 0.05
 _OVERLAY_STATE_KEYS = ("x", "y", "width", "height")
 
 
@@ -50,7 +53,14 @@ def default_download_dir(home=None) -> Path:
 def set_clipboard(text: str):
     import win32clipboard
 
-    win32clipboard.OpenClipboard()
+    for attempt in range(_CLIPBOARD_RETRY_ATTEMPTS):
+        try:
+            win32clipboard.OpenClipboard()
+            break
+        except Exception:
+            if attempt == _CLIPBOARD_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_CLIPBOARD_RETRY_SECONDS)
     try:
         win32clipboard.EmptyClipboard()
         # 显式 CF_UNICODETEXT: 默认 CF_TEXT 走 ANSI 编码, 在非中文 locale 的

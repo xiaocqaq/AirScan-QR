@@ -29,6 +29,7 @@ MAX_RESPONSE_PAGES = 1 + (RESPONSE_BODY_LIMIT + _RESPONSE_CHUNK_SIZE - 1) // _RE
 ACK_WAIT_SECONDS = 3.0
 MAX_ACK_ATTEMPTS = 8
 ROLLING_TIMEOUT_SECONDS = 120.0
+CAPTURE_INTERVAL_SECONDS = 0.1
 HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -177,10 +178,18 @@ class HostTunnel:
     def _send_over_qr(self, req: GitTunnelRequest) -> GitTunnelResponse:
         with self._request_lock:
             with self._cond:
-                self._collector = ResponseCollector(req.id)
+                collector = ResponseCollector(req.id)
+                self._collector = collector
                 self._last_progress = time.monotonic()
-            self._wait_ack(req)
-            return self._wait_response(req.id)
+                self._cond.notify_all()
+            try:
+                self._wait_ack(req)
+                return self._wait_response(req.id)
+            finally:
+                with self._cond:
+                    if self._collector is collector:
+                        self._collector = None
+                    self._cond.notify_all()
 
     def _wait_ack(self, req):
         for attempt in range(1, MAX_ACK_ATTEMPTS + 1):
@@ -216,12 +225,21 @@ class HostTunnel:
 
     def _capture_loop(self):
         while not self._stop.is_set():
+            with self._cond:
+                while (not self._stop.is_set()
+                       and not self._capture_pending()):
+                    self._cond.wait()
+            if self._stop.is_set():
+                return
             try:
                 for frame in self.frame_reader() or []:
                     self._handle_frame(frame)
             except Exception:
                 pass
-            time.sleep(0.06)
+            self._stop.wait(CAPTURE_INTERVAL_SECONDS)
+
+    def _capture_pending(self):
+        return bool(self._collector and not self._collector.complete)
 
     def _handle_frame(self, frame):
         ack = parse_ack(frame)

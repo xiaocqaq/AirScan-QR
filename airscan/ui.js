@@ -157,14 +157,14 @@ function onSendReady(total, startIndex) {
   document.getElementById('btnResumeAll').disabled = true;
 }
 function onSendAutoStopped(cycles) {
-  // 达到阈值后收回右下角弹窗，保留任务与当前位置供继续或补发。
+  // 达到阈值后收回弹窗并保持剪贴板待机，新文本会自动重新广播。
   window._sending = false;
   window._sendPaused = true;
   document.getElementById('btnSend').disabled = false;
   document.getElementById('btnSend').innerText = '继续广播';
   document.getElementById('btnPauseSend').disabled = true;
   document.getElementById('sendStatus').innerText =
-     '已播 ' + cycles + ' 遍, 弹窗已收回 · 点“继续广播”可继续播放';
+     '已播 ' + cycles + ' 遍, 弹窗已收回 · 复制新文本会自动广播';
 }
 function onClipboardSendStarted() {
   window._sending = true;
@@ -256,7 +256,7 @@ async function startRecv() {
   const result = await api('start_recv');
   if (result && result.error) {
     toast(result.error);
-    return;
+    return false;
   }
   document.getElementById('btnRecv').disabled = true;
   document.getElementById('btnRecv').innerText = '继续接收';
@@ -264,6 +264,7 @@ async function startRecv() {
   document.getElementById('recvStatus').innerText = result.resumed ? '继续接收中...' : '接收中...';
   // 继续接收时恢复计时 (若已有任务在计时); 新任务的计时由 onMeta 重置启动。
   if (result.resumed) startRecvTimer(false);
+  return true;
 }
 async function pauseRecv() {
   await api('pause_recv');
@@ -310,7 +311,8 @@ function onComplete(ok, isText, info, path, filename) {
     return;
   }
   if (isText) {
-    document.getElementById('recvStatus').innerText = '已接收文本并写入剪贴板 · 等待下一次发送';
+    document.getElementById('recvStatus').innerText =
+      info || '已接收文本并写入剪贴板 · 等待下一次发送';
     return;
   }
   progress.classList.add('ok');
@@ -388,6 +390,7 @@ const WINDOW_TARGET_KEYS = {
   recv: 'airscan-recv-window-target',
   git_host: 'airscan-git-window-target',
 };
+let recvAutoStartCompleted = false;
 function loadWindowTarget(role) {
   try { return JSON.parse(localStorage.getItem(WINDOW_TARGET_KEYS[role]) || 'null'); }
   catch (_) { return null; }
@@ -413,8 +416,12 @@ async function refreshWindows() {
     option.text = `${windowInfo.title} (${windowInfo.w}×${windowInfo.h})`;
     select.appendChild(option);
   });
-  await restoreWindowTarget('recv', select);
+  const restored = await restoreWindowTarget('recv', select);
   document.getElementById('btnRecv').disabled = !select.value;
+  if (restored && !recvAutoStartCompleted) {
+    const started = await startRecv();
+    if (started) recvAutoStartCompleted = true;
+  }
 }
 async function onWinPick() {
   const hwnd = document.getElementById('winSel').value;
@@ -441,7 +448,11 @@ function addMessage(text) {
   button.className = 'msg-copy';
   button.innerText = '复制';
   button.onclick = async () => {
-    await api('copy_text', body.innerText);
+    const result = await api('copy_text', body.innerText);
+    if (!result || !result.ok) {
+      toast((result && result.error) || '复制失败，请重试');
+      return;
+    }
     button.innerText = '完成';
     setTimeout(() => { button.innerText = '复制'; }, 1200);
   };
