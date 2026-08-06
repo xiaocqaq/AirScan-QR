@@ -166,6 +166,9 @@ textarea { scrollbar-width: none; }
 textarea::-webkit-scrollbar { width: 0; height: 0; }
 .row { display: flex; align-items: center; gap: var(--chrome-gap); margin-top: var(--chrome-gap); flex-wrap: wrap; }
 .source-row { flex-wrap: nowrap; }
+/* 下拉 + 按钮行：窄宽下不允许换行，select 可缩小到 0 避免挤掉右侧按钮 */
+.row-nowrap { flex-wrap: nowrap; }
+.row-nowrap > select { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
 .field-name {
   flex: 1;
   min-width: 80px;

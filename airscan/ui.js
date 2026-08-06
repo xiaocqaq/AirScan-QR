@@ -275,7 +275,7 @@ async function pauseRecv() {
   pauseRecvTimer();
 }
 async function resetRecv() {
-  if (!(await confirmDialog('确定清空当前接收进度吗？'))) return;
+  if (!(await confirmDialog('确定清空当前接收进度和已收到的内容吗？'))) return;
   await api('reset_recv');
   document.getElementById('btnRecv').innerText = '开始接收';
   document.getElementById('btnRecv').disabled = !document.getElementById('winSel').value;
@@ -286,6 +286,11 @@ async function resetRecv() {
   document.getElementById('progBig').innerText = '-';
   document.getElementById('pbar').style.width = '0%';
   document.getElementById('recvStatus').innerText = '任务已重置';
+  // 清空已收到的文件与文本消息
+  document.getElementById('fileList').innerHTML = '';
+  document.getElementById('msgList').innerHTML = '';
+  document.getElementById('fileSection').style.display = 'none';
+  document.getElementById('msgSection').style.display = 'none';
   resetRecvTimer();
 }
 function onMeta(name, total, isText) {

@@ -65,8 +65,8 @@
 
     <section class="panel" id="panel-recv">
       <div class="card">
-        <div class="row" style="margin-top:0">
-          <select id="winSel" style="flex:1" onchange="onWinPick()">
+        <div class="row row-nowrap" style="margin-top:0">
+          <select id="winSel" onchange="onWinPick()">
             <option value="">选择要接收的窗口...</option>
           </select>
           <button class="btn btn-gray" onclick="refreshWindows()">刷新</button>
@@ -182,8 +182,8 @@
           </div>
           <div class="sync-step">
             <div class="sync-step-label"><span class="sync-num">1</span>选择云桌面窗口</div>
-            <div class="row">
-              <select id="gitHostWindow" style="flex:1" onchange="onGitWindowPick()">
+            <div class="row row-nowrap">
+              <select id="gitHostWindow" onchange="onGitWindowPick()">
                 <option value="">选择云桌面窗口...</option>
               </select>
               <button class="btn btn-gray" onclick="refreshGitWindows()">刷新</button>

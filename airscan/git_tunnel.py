@@ -27,8 +27,12 @@ RESPONSE_BODY_LIMIT = 16 * 1024 * 1024
 _RESPONSE_CHUNK_SIZE = response_chunk_size("l")
 MAX_RESPONSE_PAGES = 1 + (RESPONSE_BODY_LIMIT + _RESPONSE_CHUNK_SIZE - 1) // _RESPONSE_CHUNK_SIZE
 ACK_WAIT_SECONDS = 3.0
-MAX_ACK_ATTEMPTS = 8
-ROLLING_TIMEOUT_SECONDS = 120.0
+MAX_ACK_ATTEMPTS = 4
+ROLLING_TIMEOUT_SECONDS = 60.0
+# 排队等待上限：超过则直接抛弃该请求，避免堆积时串行累加导致无响应
+QUEUE_WAIT_SECONDS = 12.0
+# http.client 连接阶段超时（响应整体上限由 ROLLING_TIMEOUT_SECONDS 兜底）
+CONNECT_TIMEOUT_SECONDS = 15.0
 CAPTURE_INTERVAL_SECONDS = 0.1
 HOP_BY_HOP = {
     "connection",
@@ -86,7 +90,7 @@ def forward_http_request(req: GitTunnelRequest, target: tuple[str, int],
     if req.body is not None and len(req.body) > REQUEST_BODY_LIMIT:
         raise GitTunnelServiceError(413, "Git 请求体过大，超过 Git 隧道上限")
     headers = {k: v for k, v in filter_request_headers(req.headers)}
-    conn = http.client.HTTPConnection(target[0], target[1], timeout=120)
+    conn = http.client.HTTPConnection(target[0], target[1], timeout=CONNECT_TIMEOUT_SECONDS)
     try:
         conn.request(req.method, req.path, body=req.body, headers=headers)
         resp = conn.getresponse()
@@ -176,7 +180,11 @@ class HostTunnel:
         self._write_http_response(handler, resp)
 
     def _send_over_qr(self, req: GitTunnelRequest) -> GitTunnelResponse:
-        with self._request_lock:
+        # 排队超时抛弃：QR 通道单工，必须串行；但堆积时新请求等待超过上限直接 503，
+        # 不再无限挂起，避免 N 个卡死请求的串行累加导致整体无响应。
+        if not self._request_lock.acquire(timeout=QUEUE_WAIT_SECONDS):
+            raise GitTunnelServiceError(503, "Git 隧道繁忙，请求已丢弃")
+        try:
             with self._cond:
                 collector = ResponseCollector(req.id)
                 self._collector = collector
@@ -190,6 +198,8 @@ class HostTunnel:
                     if self._collector is collector:
                         self._collector = None
                     self._cond.notify_all()
+        finally:
+            self._request_lock.release()
 
     def _wait_ack(self, req):
         for attempt in range(1, MAX_ACK_ATTEMPTS + 1):
