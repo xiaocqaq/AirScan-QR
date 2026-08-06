@@ -168,7 +168,10 @@ textarea::-webkit-scrollbar { width: 0; height: 0; }
 .source-row { flex-wrap: nowrap; }
 /* 下拉 + 按钮行：窄宽下不允许换行，select 可缩小到 0 避免挤掉右侧按钮 */
 .row-nowrap { flex-wrap: nowrap; }
-.row-nowrap > select { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+/* select 的 option 长文本会撑开其 min-content 宽度，min-width:0 不足以缩。
+   width:0 + flex:1 强制 flex 从 0 增长，让 select 真正随容器收缩；按钮不压缩保底可见。 */
+.row-nowrap > select { min-width: 0; width: 0; flex: 1 1 auto; }
+.row-nowrap > .btn { flex-shrink: 0; }
 .field-name {
   flex: 1;
   min-width: 80px;
