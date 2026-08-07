@@ -34,6 +34,9 @@ QUEUE_WAIT_SECONDS = 12.0
 # http.client 连接阶段超时（响应整体上限由 ROLLING_TIMEOUT_SECONDS 兜底）
 CONNECT_TIMEOUT_SECONDS = 15.0
 CAPTURE_INTERVAL_SECONDS = 0.1
+# 抓帧循环的目标节拍: 抓一次云桌面窗口并解码可能耗 0.3~0.8 秒,
+# 若只固定 sleep 0.1 秒, 循环占用率接近 100%, 会把界面拖成无响应。
+CAPTURE_CYCLE_SECONDS = 0.3
 HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -241,12 +244,16 @@ class HostTunnel:
                     self._cond.wait()
             if self._stop.is_set():
                 return
+            started = time.monotonic()
             try:
                 for frame in self.frame_reader() or []:
                     self._handle_frame(frame)
             except Exception:
                 pass
-            self._stop.wait(CAPTURE_INTERVAL_SECONDS)
+            # 按实际耗时补齐节拍: 抓帧+解码可能耗数百毫秒, 必须留出空闲,
+            # 否则本进程 CPU 被打满, WebView UI 抢不到时间片而无响应。
+            self._stop.wait(max(CAPTURE_INTERVAL_SECONDS,
+                                CAPTURE_CYCLE_SECONDS - (time.monotonic() - started)))
 
     def _capture_pending(self):
         return bool(self._collector and not self._collector.complete)

@@ -7,7 +7,6 @@ import sys
 import tempfile
 import threading
 import time
-import traceback
 from collections import OrderedDict
 
 import webview
@@ -104,6 +103,42 @@ class ImageDataUrlCache:
         self._items.clear()
 
 
+class FrameDeduper:
+    """按抓帧内容去重: 画面没变就跳过解码。
+
+    整帧解码一张 2176x1377 约需 340ms, 而抓帧循环每 0.1~0.3 秒一次,
+    画面不变时白解码会把 CPU 吃满, 拖住同进程的 WebView UI。
+    指纹只采样若干等距横条 (约 0.8ms), 远快于整帧 tobytes (约 33ms);
+    二维码高度远大于条带间距, 画面变化必然落在采样行上。
+    """
+
+    _ROWS = 16
+
+    def __init__(self):
+        self._last = None
+
+    def _fingerprint(self, img):
+        width, height = img.size
+        rows = []
+        for index in range(self._ROWS):
+            y = height * index // self._ROWS
+            rows.append(img.crop((0, y, width, y + 1)).tobytes())
+        return img.size, hash(b"".join(rows))
+
+    def is_duplicate(self, img):
+        try:
+            key = self._fingerprint(img)
+        except Exception:
+            return False
+        if key == self._last:
+            return True
+        self._last = key
+        return False
+
+    def reset(self):
+        self._last = None
+
+
 def _js_str(s: str) -> str:
     """安全地把 Python 字符串嵌入 evaluate_js 调用 (JSON 转义)。"""
     return json.dumps(s, ensure_ascii=False)
@@ -126,6 +161,8 @@ _overlay_geometry_lock = threading.Lock()
 # overlay 原生窗口操作互斥: open/hide 可能从发送线程与 Git 隧道线程并发调用，
 # 同一时刻只允许一个线程 resize/move/show/hide，避免 WinForms Control.Invoke 竞争冻结 UI。
 _overlay_window_lock = threading.Lock()
+# overlay 原生句柄缓存: 用 Win32 SetWindowPos 置顶，避免 WinForms TopMost 跨线程死锁。
+_overlay_hwnd = 0
 # 主窗口状态文字节流: publish_send_frame 每帧都更新主窗口状态栏没必要，
 # 限频到 200ms 一次，减少对 UI 线程的 Invoke 压力。
 _status_throttle_lock = threading.Lock()
@@ -141,6 +178,9 @@ INSTANCE_MUTEX_NAME = r"Local\AirScan-QR.SingleInstance"
 ERROR_ALREADY_EXISTS = 183
 GIT_QR_FRAME_SECONDS = 0.4
 GIT_QR_SINGLE_SECONDS = 0.25
+# Git 播放结束后 overlay 空闲多久收回: 期间来新请求直接复用窗口，
+# 既避免逐请求 open/hide 抖动，又能在真正空闲时让出屏幕。
+GIT_OVERLAY_IDLE_SECONDS = 3.0
 OVERLAY_WIDTH = 360
 OVERLAY_HEIGHT = 420
 OVERLAY_MARGIN = 12
@@ -190,32 +230,9 @@ def _notify_already_running():
         pass
 
 
-_DIAG_LOG_PATH = os.path.join(tempfile.gettempdir(), "airscan_diag.log")
-_diag_lock = threading.Lock()
-
-
-def _diag_log(tag, phase, code_hint=""):
-    """诊断用: 记录 UI 调用的开始/结束时间戳。卡死时最后一个 begin 无 end 的即元凶。
-    定位后移除。"""
-    try:
-        line = f"{time.strftime('%H:%M:%S')}.{int(time.monotonic()*1000)%1000:03d} " \
-               f"tid={threading.get_ident()} [{phase}] {tag} {code_hint[:80]}\n"
-        with _diag_lock:
-            with open(_DIAG_LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(line)
-    except Exception:
-        pass
-
-
 def _js(code: str):
     if _window is not None:
-        _diag_log("evaluate_js(main)", "begin", code)
-        try:
-            _window.evaluate_js(code)
-            _diag_log("evaluate_js(main)", "end")
-        except Exception as e:
-            _diag_log("evaluate_js(main)", f"err:{e}")
-            raise
+        _window.evaluate_js(code)
 
 
 def _overlay_js(code: str):
@@ -223,12 +240,33 @@ def _overlay_js(code: str):
         return
     if _overlay_minimized:
         return
-    _diag_log("evaluate_js(overlay)", "begin", code)
     try:
         _overlay_window.evaluate_js(code)
-        _diag_log("evaluate_js(overlay)", "end")
-    except Exception as e:
-        _diag_log("evaluate_js(overlay)", f"err:{e}")
+    except Exception:
+        pass
+
+
+def _resolve_overlay_hwnd() -> int:
+    """取 overlay 原生窗口句柄并缓存，供 Win32 置顶使用。"""
+    global _overlay_hwnd
+    if _overlay_hwnd and wincap.window_exists(_overlay_hwnd):
+        return _overlay_hwnd
+    _overlay_hwnd = wincap.find_window_by_title(OVERLAY_TITLE)
+    return _overlay_hwnd
+
+
+def _overlay_set_topmost():
+    """置顶 overlay。
+
+    绝不能用 pywebview 的 `window.on_top = True`: 它底层是 WinForms `TopMost`
+    属性赋值 (winforms.py set_on_top)，没有 Invoke 包装。从后台线程赋值时 .NET
+    隐式 marshal 到 GUI 线程并同步等待，而 GUI 线程此刻正忙于处理前面 resize/move
+    的 SetWindowPos 消息与 WebView2 渲染，双方互等形成死锁 —— 实测会让整个程序
+    永久无响应（日志中三次冻结均卡在 on_top）。改用纯 Win32 SetWindowPos。
+    """
+    hwnd = _resolve_overlay_hwnd()
+    if hwnd:
+        wincap.set_topmost(hwnd)
 
 
 def _screen_work_area(screen):
@@ -421,6 +459,14 @@ class Api:
         self.git_host = None
         self.git_cloud = None
         self._git_qr_active = threading.Event()
+        # Git 播放期间 overlay 是否已打开(避免每请求 open/hide 抖动)，
+        # 配合 _git_overlay_timer 做空闲延迟隐藏。
+        self._git_overlay_held = False
+        self._git_overlay_timer = None
+        self._git_overlay_lock = threading.Lock()
+        # 抓帧去重: 画面没变就跳过解码, 避免持续解码吃满 CPU 导致界面无响应。
+        self._recv_frame_dedup = FrameDeduper()
+        self._git_frame_dedup = FrameDeduper()
 
     def pick_file(self):
         res = _window.create_file_dialog(webview.OPEN_DIALOG)
@@ -682,48 +728,32 @@ class Api:
             return {"error": "悬浮窗尚未就绪"}
         # 原生窗口操作互斥: 防止后台线程并发 resize/move/show 触发
         # WinForms Control.Invoke 竞争，导致 UI 线程冻结无响应。
-        _diag_log("open_overlay", "begin")
         with _overlay_window_lock:
             if _overlay_window is None:
-                _diag_log("open_overlay", "end(no-window)")
                 return {"error": "悬浮窗尚未就绪"}
             try:
                 geometry = _fit_overlay_geometry(_overlay_geometry_state)
-                _diag_log("overlay.resize", "begin", f"{geometry['width']}x{geometry['height']}")
                 _overlay_window.resize(geometry["width"], geometry["height"])
-                _diag_log("overlay.resize", "end")
-                _diag_log("overlay.move", "begin", f"{geometry['x']},{geometry['y']}")
                 _overlay_window.move(geometry["x"], geometry["y"])
-                _diag_log("overlay.move", "end")
-                _diag_log("overlay.on_top", "begin")
-                _overlay_window.on_top = True
-                _diag_log("overlay.on_top", "end")
-                _diag_log("overlay.show", "begin")
                 _overlay_window.show()
-                _diag_log("overlay.show", "end")
+                # 置顶走 Win32 SetWindowPos，不用 on_top 属性(会跨线程死锁)。
+                _overlay_set_topmost()
                 _overlay_minimized = False
-                _diag_log("open_overlay", "end")
                 return {"ok": True}
             except Exception as exc:
-                _diag_log("open_overlay", f"err:{exc}")
                 return {"error": f"悬浮窗显示失败: {exc}"}
 
     def hide_overlay(self):
         """收回弹窗但保留 WebView，下个任务直接复用，避免反复创建窗口。"""
         global _overlay_minimized
-        _diag_log("hide_overlay", "begin")
         with _overlay_window_lock:
             if _overlay_window is None:
                 _overlay_minimized = True
-                _diag_log("hide_overlay", "end(no-window)")
                 return {"ok": True}
             _overlay_minimized = True
             try:
-                _diag_log("overlay.hide", "begin")
                 _overlay_window.hide()
-                _diag_log("overlay.hide", "end")
-            except Exception as e:
-                _diag_log("overlay.hide", f"err:{e}")
+            except Exception:
                 pass
         _flush_overlay_geometry()
         return {"ok": True}
@@ -734,8 +764,11 @@ class Api:
             self._send_thread and self._send_thread.is_alive()
             and not self._send_stop.is_set()
         )
-        if not send_active and not self._git_qr_active.is_set():
-            self.hide_overlay()
+        # Git 播放持有 overlay 期间不收回: 由空闲定时器 _release_git_overlay 统一收尾，
+        # 避免普通发送结束时抢先关掉正在复用的 Git 窗口。
+        if send_active or self._git_qr_active.is_set() or self._git_overlay_held:
+            return
+        self.hide_overlay()
 
     def list_windows(self):
         return wincap.list_windows()
@@ -853,12 +886,16 @@ class Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    # 捕获异常时错误信息最多每 2 秒推送一次前端, 避免每轮 (0.06s) 刷 DOM。
+    # 捕获异常时错误信息最多每 2 秒推送一次前端, 避免每轮刷 DOM。
     RECV_ERROR_THROTTLE = 2.0
+    # 接收循环的目标节拍: 抓帧+解码可能耗时数百毫秒, 按实际耗时补齐,
+    # 保证每轮都给 UI 线程留出空闲, 避免界面无响应。
+    RECV_CYCLE_SECONDS = 0.2
 
     def _recv_loop(self):
         last_error_at = float("-inf")
         while not self._recv_stop.is_set():
+            started = time.monotonic()
             try:
                 hwnd = self._resolve_target_hwnd("recv")
                 if not hwnd:
@@ -866,15 +903,19 @@ class Api:
                 img = wincap.grab_window(hwnd)
                 if img is None:
                     self.hwnd = None
+                    self._recv_frame_dedup.reset()
                     raise RuntimeError("等待锁定窗口重新打开")
-                self.receiver.feed(img)
+                # 画面未变说明没有新二维码, 跳过解码 (整帧解码约 340ms, 会吃满 CPU)。
+                if not self._recv_frame_dedup.is_duplicate(img):
+                    self.receiver.feed(img)
                 last_error_at = float("-inf")  # 恢复正常 -> 下次异常立即提示
             except Exception as e:
                 now = time.monotonic()
                 if now - last_error_at >= self.RECV_ERROR_THROTTLE:
                     last_error_at = now
                     _js(f"document.getElementById('recvStatus').innerText={_js_str('捕获错误: ' + str(e))}")
-            time.sleep(0.06)
+            # 按实际耗时补齐节拍: 解码慢时也要留出空闲, 否则 UI 线程抢不到 CPU。
+            time.sleep(max(0.06, self.RECV_CYCLE_SECONDS - (time.monotonic() - started)))
 
     def _on_meta(self, task):
         _js(f"onMeta({_js_str(task.name)}, {task.total}, {str(task.is_text).lower()})")
@@ -1012,6 +1053,7 @@ class Api:
             if self.git_cloud.status().get("running"):
                 return {"ok": False, "error": "云端转发正在结束，请稍后再试"}
             self.git_cloud = None
+        self._release_git_overlay()
         return {"ok": True}
 
     def git_tunnel_status(self):
@@ -1029,6 +1071,10 @@ class Api:
         img = wincap.grab_window(hwnd)
         if img is None:
             self._git_host_hwnd = None
+            self._git_frame_dedup.reset()
+            return []
+        # 云桌面窗口大部分时间画面不变, 重复帧直接跳过解码, 避免持续吃满 CPU 拖住 UI。
+        if self._git_frame_dedup.is_duplicate(img):
             return []
         return P.decode_qr_all(img)
 
@@ -1049,12 +1095,44 @@ class Api:
             return
         self._git_qr_active.set()
         try:
-            self.open_overlay()
+            # 每请求 open/hide 会造成毫秒级抖动(实测 223 次 open / 230 次 hide)，
+            # 每次 open 都是 resize+move+show 三次原生窗口操作压向 GUI 线程。
+            # 这里改为: 复用已打开的 overlay，播完延迟收回，期间来新请求直接复用。
+            self._cancel_git_overlay_timer()
+            if not self._git_overlay_held:
+                self.open_overlay()
+                self._git_overlay_held = True
             with self._qr_output_lock:
                 self._play_git_qr_pages(pages, status, req_id, is_cancelled)
         finally:
             self._git_qr_active.clear()
-            self._hide_overlay_if_idle()
+            # 延迟收回: GIT_OVERLAY_IDLE_SECONDS 内无新请求才隐藏，
+            # 有新请求会 _cancel_git_overlay_timer 取消本次隐藏并复用窗口。
+            self._schedule_git_overlay_hide()
+
+    def _cancel_git_overlay_timer(self):
+        with self._git_overlay_lock:
+            timer = self._git_overlay_timer
+            self._git_overlay_timer = None
+        if timer:
+            timer.cancel()
+
+    def _schedule_git_overlay_hide(self):
+        self._cancel_git_overlay_timer()
+        timer = threading.Timer(GIT_OVERLAY_IDLE_SECONDS, self._release_git_overlay)
+        timer.daemon = True
+        with self._git_overlay_lock:
+            self._git_overlay_timer = timer
+        timer.start()
+
+    def _release_git_overlay(self):
+        """空闲超时或云端转发停止时收回 Git overlay。"""
+        self._cancel_git_overlay_timer()
+        # 定时器到点时可能又有新请求在播，此时不收回。
+        if self._git_qr_active.is_set():
+            return
+        self._git_overlay_held = False
+        self._hide_overlay_if_idle()
 
     def _play_git_qr_pages(self, pages, status, req_id, is_cancelled):
         # loops 偏低: Git 响应页数多时总帧数 = loops×pages，过高会长时间占用
@@ -1106,6 +1184,10 @@ class Api:
                 except Exception:
                     pass
                 setattr(self, name, None)
+        try:
+            self._release_git_overlay()
+        except Exception:
+            pass
         return {"ok": True}
 
 
@@ -1171,60 +1253,11 @@ def _start_tray():
     threading.Thread(target=_tray.run, daemon=True).start()
 
 
-def _start_watchdog():
-    """诊断用: 监控主线程是否阻塞。主线程栈 10 秒不变则 dump 所有线程栈到日志。
-
-    定位卡死根因后移除。
-    """
-    log_path = os.path.join(tempfile.gettempdir(), "airscan_watchdog.log")
-    main_ident = threading.main_thread().ident
-
-    def _dump_all(reason):
-        try:
-            frames = sys._current_frames()
-            lines = [f"===== {reason} @ {time.strftime('%H:%M:%S')} ====="]
-            for tid, frame in frames.items():
-                name = "main" if tid == main_ident else f"thread-{tid}"
-                lines.append(f"\n--- {name} (tid={tid}) ---")
-                lines.append("".join(traceback.format_stack(frame)))
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
-        except Exception:
-            pass
-
-    def _loop():
-        last_stack = None
-        stuck_since = None
-        dumped = False
-        while True:
-            time.sleep(5)
-            try:
-                frame = sys._current_frames().get(main_ident)
-                stack = "".join(traceback.format_stack(frame)) if frame else ""
-            except Exception:
-                continue
-            if stack == last_stack:
-                if stuck_since is None:
-                    stuck_since = time.monotonic()
-                elif not dumped and time.monotonic() - stuck_since >= 10:
-                    _dump_all("主线程阻塞超过10秒")
-                    dumped = True
-            else:
-                stuck_since = None
-                dumped = False
-            last_stack = stack
-
-    threading.Thread(target=_loop, daemon=True).start()
-
-
 def main():
     global _api, _window, _overlay_window, _overlay_minimized, _overlay_geometry_state
     if not _acquire_single_instance():
         _notify_already_running()
         return
-    # 诊断看门狗: 每 5 秒抓一次所有线程调用栈，主线程栈长时间不变即判定阻塞，
-    # 写入日志便于定位卡死根因。定位完成后移除。
-    _start_watchdog()
     if sys.platform == "win32":
         # 绑定 AppUserModelID: 让任务栏用 exe 自带的 QR 图标, 而非默认 python 图标。
         try:

@@ -149,6 +149,47 @@ if _WIN:
         except Exception:
             return False
 
+    _HWND_TOPMOST = -1
+    _SWP_NOSIZE = 0x0001
+    _SWP_NOMOVE = 0x0002
+    _SWP_NOACTIVATE = 0x0010
+
+    def set_topmost(hwnd) -> bool:
+        """用 Win32 SetWindowPos 置顶窗口。
+
+        不能用 WinForms 的 TopMost 属性: 那是跨线程属性赋值, .NET 会隐式 marshal
+        到 GUI 线程并同步等待, 与 GUI 线程正在处理的窗口消息/WebView2 渲染形成死锁,
+        表现为整个程序无响应。SetWindowPos 是纯 Win32 调用, 跨线程安全。
+        """
+        if not hwnd:
+            return False
+        try:
+            return bool(windll.user32.SetWindowPos(
+                int(hwnd), _HWND_TOPMOST, 0, 0, 0, 0,
+                _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE))
+        except Exception:
+            return False
+
+    def find_window_by_title(title) -> int:
+        """按精确标题找顶层窗口句柄; 找不到返回 0。"""
+        target = str(title or "").strip()
+        if not target:
+            return 0
+        found = []
+
+        def cb(hwnd, _):
+            try:
+                if win32gui.GetWindowText(hwnd).strip() == target:
+                    found.append(hwnd)
+            except Exception:
+                pass
+
+        try:
+            win32gui.EnumWindows(cb, None)
+        except Exception:
+            return 0
+        return int(found[0]) if found else 0
+
 else:  # 非 Windows: 占位实现
     def list_windows():
         return []
@@ -161,3 +202,9 @@ else:  # 非 Windows: 占位实现
 
     def focus_window(hwnd) -> bool:
         return False
+
+    def set_topmost(hwnd) -> bool:
+        return False
+
+    def find_window_by_title(title) -> int:
+        return 0
